@@ -1,0 +1,10 @@
+Body Name,Width,Length,Thickness
+LeftSide,x,z,y
+RightSide,x,z,y
+Top,x,y,z
+Bottom,x,y,z
+Back,z,x,y
+Shelf,x,z,y
+RE Corner,y,z,x
+CornerBack,y,z,x
+Nailer,x,z,y

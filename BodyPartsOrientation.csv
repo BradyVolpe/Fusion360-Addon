@@ -1,0 +1,121 @@
+﻿Body Name,Thickness,Length,Width
+Back,y,z,x
+Blind Panel,y,z,x
+Bottom,z,x,y
+Bottom Door Face,y,z,x
+Bottom Drawer Face,y,z,x
+Bottom Drawer Slab Face,y,z,x
+Bottom Drawers Face,y,z,x
+Bottom Left Door Face,y,z,x
+Bottom Right Door Face,y,z,x
+Bottom Nailer,y,x,z
+Bottom Rail,y,x,z
+CornerBack,,z,
+Cross Brace,x,y,z
+Divider,x,z,y
+Door Face,y,z,x
+Drawer Back,y,x,z
+Drawer Bottom,z,y,x
+Drawer Face,y,z,x
+Drawer Front,y,x,z
+Drawer Middle Face,y,z,x
+Drawer Stretcher,z,x,y
+Dwr Bottom,z,y,x
+DwrBack,y,x,z
+DwrBotBack,y,x,z
+DwrBotFront,y,x,z
+DwrBotLSide,x,y,z
+DwrBotRSide,x,y,z
+DwrBottom,z,y,x
+DwrFront,y,x,z
+DwrLSide,x,y,z
+DwrMidLSide,x,y,z
+DwrMidRSide,x,y,z
+DwrRSide,x,y,z
+DwrTLSide,x,y,z
+DwrTRSide,x,y,z
+FixShelf,z,x,y
+Front Stretcher,z,x,y
+Full Shelf,z,x,y
+L Applied End,x,z,y
+L Backing,x,z,y
+L Backing Front,x,z,y
+L Backing Rear,x,z,y
+L Bottom Rail,x,y,z
+L Corner Door Face,x,z,y
+L Door Face,y,z,x
+L Drawer Side,x,y,z
+L Scribe,y,z,x
+L Scribe Back,x,z,y
+L Scribe Backer,x,z,y
+L Stile,y,z,x
+L Top Rail,x,y,z
+LE,x,z,y
+LE Corner,y,z,x
+Left Back,x,z,y
+Left Corner Stile,x,z,y
+Left Door Face,y,z,x
+Left Miter,y,z,x
+Left Scribe,y,z,x
+Left Stile,y,z,x
+LeftAppliedEnd,x,z,y
+LeftMiter,y,z,x
+MDwrBack,y,x,z
+MDwrBottom,z,y,x
+MDwrFront,y,x,z
+MDwrLSide,x,y,z
+Mid Rail,y,x,z
+Mid Stile,y,z,x
+Mid Stile Bottom,y,z,x
+Middle Drawer Face,y,z,x
+Middle Drawer Slab Face,y,z,x
+Nailer,y,x,z
+R Applied End,x,z,y
+R Backing,x,z,y
+R Backing Front,x,z,y
+R Backing Rear,x,z,y
+R Bottom Rail,y,x,z
+R Corner Door Face,y,z,x
+R Door Face,y,z,x
+R Drawer Side,x,y,z
+R Scribe,y,z,x
+R Scribe Back,x,z,y
+R Scribe Backer,x,z,y
+R Stile,y,z,x
+R Top Rail,y,x,z
+RE,x,z,y
+RE Corner,x,z,y
+Rear Stretcher,z,x,y
+Rear Top Stretcher,z,x,y
+Right Back,y,z,x
+Right Corner Stile,y,z,x
+Right Door Face,y,z,x
+Right Miter,y,z,x
+Right Scribe,y,z,x
+Right Stile,y,z,x
+RightAppledEnd,x,z,y
+RightMiter,y,z,x
+Scribe,y,z,x
+Scribe back,x,z,y
+Scribe Back R,x,z,y
+Scribe Backer,x,z,y
+Scribe L,x,z,y
+Scribe L,y,z,x
+Scribe R,y,z,x
+Shelf,z,x,y
+Shelf,z,x,y
+TDrwRightSide,x,y,z
+TDwrBack,y,x,z
+TDwrBot,z,y,x
+TDwrFront,y,x,z
+TDwrLeftSide,x,y,z
+Toe,y,x,z
+Toe Corner,x,y,z
+Top,z,x,y
+Top Back Stretcher,z,x,y
+Top Door Face,y,z,x
+Top Drawer Face,y,z,x
+Top Drawer Slab Face,y,z,x
+Top Nailer,y,x,z
+Top Rail,y,x,z
+Top Stetcher,z,x,y

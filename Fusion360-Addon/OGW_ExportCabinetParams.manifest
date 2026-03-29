@@ -1,0 +1,13 @@
+{
+	"autodeskProduct":	"Fusion360",
+	"type":	"addin",
+	"id":	"OGW_ExportCabinetParams",
+	"author":	"Old Guy Woodworks",
+	"description":	{
+		"":	"Export cabinet parameters (width, height, depth) to CSV files."
+	},
+	"version":	"2.0.0",
+	"runOnStartup":	false,
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true
+}
