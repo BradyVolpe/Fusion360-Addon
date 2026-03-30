@@ -413,6 +413,15 @@ def _gather_for_body(body: adsk.fusion.BRepBody, units: str, include_obb: bool, 
                 if rule:
                     # Map directly via rule axes in component-local space
                     t_mm, l_mm, w_mm = dims_from_rule(ext, rule)
+
+                    # Enforce thickness = smallest dimension when lockThicknessMin is on.
+                    # Bodies oriented differently in component-local space can map axes
+                    # inconsistently; sorting guarantees Thickness < Width < Length
+                    # regardless of local orientation (correct for sheet goods).
+                    if PREFS.get('lockThicknessMin', True):
+                        vals = sorted([t_mm, l_mm, w_mm])
+                        t_mm, w_mm, l_mm = vals[0], vals[1], vals[2]
+
                     record['_t_axis'] = (rule.get('Thickness') or rule.get('t','')).lower()
                     record['_l_axis'] = (rule.get('Length') or rule.get('l','')).lower()
                     record['_w_axis'] = (rule.get('Width') or rule.get('w','')).lower()
