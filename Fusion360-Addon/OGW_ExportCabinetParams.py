@@ -831,7 +831,24 @@ class CmdExecute(adsk.core.CommandEventHandler):
 
             des = _design()
             if not des:
-                UI.messageBox('No active design.')
+                # Retry: sometimes activeProduct needs a moment after dialog closes
+                import time
+                time.sleep(0.2)
+                des = _design()
+            if not des:
+                # Diagnostic: report what activeProduct actually is
+                try:
+                    app = adsk.core.Application.get()
+                    prod = app.activeProduct
+                    prod_type = type(prod).__name__ if prod else 'None'
+                    UI.messageBox(
+                        f'No active Fusion Design found.\n\n'
+                        f'Active product type: {prod_type}\n\n'
+                        f'Make sure you have a design open and are in the '
+                        f'DESIGN workspace (not Drawing, CAM, etc.).'
+                    )
+                except:
+                    UI.messageBox('No active design.')
                 return
 
             root = des.rootComponent
