@@ -27,8 +27,6 @@ mkdir -p "$DST_DIR"
 cp -f "$SRC_DIR/OGW_ExportCabinetParams.py" "$DST_DIR/"
 [ -f "$SRC_DIR/OGW_ExportCabinetParams.manifest" ] && cp -f "$SRC_DIR/OGW_ExportCabinetParams.manifest" "$DST_DIR/"
 [ -f "$SRC_DIR/BodyPartsOrientation.csv" ] && cp -f "$SRC_DIR/BodyPartsOrientation.csv" "$DST_DIR/"
-[ -f "$SRC_DIR/README-Fusion360-Addon.txt" ] && cp -f "$SRC_DIR/README-Fusion360-Addon.txt" "$DST_DIR/"
-
 # Check manifest is present
 if [ ! -f "$DST_DIR/OGW_ExportCabinetParams.manifest" ]; then
     echo "  WARNING: Missing OGW_ExportCabinetParams.manifest in $DST_DIR"

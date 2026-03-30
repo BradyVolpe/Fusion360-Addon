@@ -791,7 +791,7 @@ class CmdInputChanged(adsk.core.InputChangedEventHandler):
             if folder_input and filename_input:
                 folder_path = folder_input.value
                 filename = filename_input.value or 'CabinetParams'
-                folder_input.tooltip = f'{folder_path}\\{filename}.csv'
+                folder_input.tooltip = os.path.join(folder_path, f'{filename}.csv')
         except:
             pass
 

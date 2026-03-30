@@ -183,13 +183,37 @@ function parseCSV(text) {
   const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return { parts: [], warnings: ['CSV has no data rows.'] };
 
-  const hdr = lines[0].split(',').map(h => h.trim());
+  // CSV field splitter that handles quoted fields (e.g., "Panel, Left")
+  function splitCSVRow(line) {
+    const fields = []; let field = '', inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inQuotes) {
+        if (c === '"' && line[i+1] === '"') { field += '"'; i++; }
+        else if (c === '"') { inQuotes = false; }
+        else { field += c; }
+      } else {
+        if (c === '"') { inQuotes = true; }
+        else if (c === ',') { fields.push(field.trim()); field = ''; }
+        else { field += c; }
+      }
+    }
+    fields.push(field.trim());
+    return fields;
+  }
+
+  const hdr = splitCSVRow(lines[0]);
   const idx = {};
   hdr.forEach((h, i) => idx[h] = i);
 
+  // Validate required columns
+  const required = ['Part_ID', 'Width', 'Height'];
+  const missing = required.filter(c => !(c in idx));
+  if (missing.length) return { parts: [], warnings: [`Missing required CSV columns: ${missing.join(', ')}`] };
+
   const parts = [], warnings = [];
   for (let r = 1; r < lines.length; r++) {
-    const cols = lines[r].split(',').map(c => c.trim());
+    const cols = splitCSVRow(lines[r]);
     const partId = cols[idx['Part_ID']] || '';
     const cabId = cols[idx['Cabinet_ID']] || partId;
     const w = parseFloat(cols[idx['Width']]);
@@ -364,8 +388,6 @@ function solve(parts, sheetW, sheetH, kerf, allowRotation) {
 
   const grandParts = results.reduce((s, r) => s + r.totalParts, 0);
   const grandSheets = results.reduce((s, r) => s + r.totalSheets, 0);
-  const grandSheetArea = results.reduce((s, r) => r.sheets.length * sheetW * sheetH + s - r.sheets.length * sheetW * sheetH + r.sheets.length * sheetW * sheetH, 0);
-  // Simpler:
   const gSheetArea = results.reduce((s, r) => s + r.totalSheets * sheetW * sheetH, 0);
   const gUsedArea = results.reduce((s, r) => s + r.sheets.reduce((ss, sh) => ss + sh.usedArea, 0), 0);
   const grandWaste = gSheetArea > 0 ? ((gSheetArea - gUsedArea) / gSheetArea * 100).toFixed(1) : '0.0';
@@ -476,7 +498,8 @@ function runOptimize() {
 
   const sheetW = parseFloat(document.getElementById('sheetW').value) || 96;
   const sheetH = parseFloat(document.getElementById('sheetH').value) || 48;
-  const kerf = parseFloat(document.getElementById('kerf').value) || 0.125;
+  const kerfVal = parseFloat(document.getElementById('kerf').value);
+  const kerf = isNaN(kerfVal) ? 0.125 : kerfVal;
   const allowRot = document.getElementById('allowRot').checked;
 
   const { results, warnings, grandParts, grandSheets, grandWaste, materialCount } = solve(loadedParts, sheetW, sheetH, kerf, allowRot);
