@@ -974,8 +974,12 @@ class CmdExecute(adsk.core.CommandEventHandler):
                     # Ensure the folder path is absolute and exists
                     abs_folder = os.path.abspath(folder)
                     if os.path.exists(abs_folder):
-                        # Use the Windows explorer command with proper path formatting
-                        subprocess.run(['explorer', abs_folder], shell=False, check=False)
+                        # Open folder in the platform's file manager
+                        import sys
+                        if sys.platform == 'darwin':
+                            subprocess.run(['open', abs_folder], check=False)
+                        else:
+                            subprocess.run(['explorer', abs_folder], shell=False, check=False)
                     else:
                         UI.messageBox(f'Folder not found: {abs_folder}', 'Error Opening Folder')
                 except Exception as e:
