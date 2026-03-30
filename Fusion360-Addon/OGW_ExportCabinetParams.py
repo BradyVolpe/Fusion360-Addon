@@ -1040,6 +1040,6 @@ def stop(context):
         cd = ui.commandDefinitions.itemById(CMD_ID)
         if cd:
             cd.deleteMe()
-        ui.messageBox('OGW Cabinet Parameter Exporter unloaded.')
+        # Silently unload — no need to show a dialog on every Fusion quit
     except:
         pass
