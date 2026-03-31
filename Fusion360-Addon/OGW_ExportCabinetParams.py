@@ -1045,7 +1045,7 @@ def run(context):
 
         _add_cmd_to_ui(cmd_def)
 
-        UI.messageBox(f'✅ OGW Cabinet Parameter Exporter v0.1 loaded!\n\n📁 Export Location: {PREFS["exportFolder"]}\n\n🔍 Look for "OGW: Export Cabinet Parameters" in the toolbar.')
+        # Silently load — the command in the toolbar is sufficient indication
     except:
         if UI:
             UI.messageBox('Add‑in run failed\n' + traceback.format_exc())
