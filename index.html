@@ -153,10 +153,17 @@ footer { text-align: center; padding: 2rem; color: var(--muted); font-size: .85r
       </div>
       <div class="setting">
         <div class="cb-setting">
+          <input type="checkbox" id="respectGrain" checked>
+          <label for="respectGrain" style="margin:0">Respect grain direction</label>
+        </div>
+        <span class="setting-hint">Lock grain (Height) to sheet long side (96″)</span>
+      </div>
+      <div class="setting">
+        <div class="cb-setting">
           <input type="checkbox" id="allowRot" checked>
           <label for="allowRot" style="margin:0">Allow rotation (90°)</label>
         </div>
-        <span class="setting-hint">Uncheck if grain direction matters</span>
+        <span class="setting-hint">Only applies when grain lock is off</span>
       </div>
     </div>
 
@@ -251,7 +258,7 @@ function fractionStr(v) {
 }
 
 // ===== Guillotine Bin Packer =====
-function createPacker(sheetW, sheetH, kerf) {
+function createPacker(sheetW, sheetH, kerf, respectGrain) {
   const freeRects = [{ x: 0, y: 0, w: sheetW, h: sheetH }];
   const placements = [];
 
@@ -279,17 +286,50 @@ function createPacker(sheetW, sheetH, kerf) {
   function tryPlace(part, allowRotation) {
     const pw = part.width + kerf, ph = part.height + kerf;
     const rw = part.height + kerf, rh = part.width + kerf;
-    let bestIdx = -1, bestScore = Infinity, bestRotated = false, bestEW = 0, bestEH = 0;
+    let bestIdx = -1, bestScore = Infinity, bestRotated = false, bestEW = 0, bestEH = 0, grainViolation = false;
 
-    for (let i = 0; i < freeRects.length; i++) {
-      const rect = freeRects[i];
-      if (pw <= rect.w + 0.001 && ph <= rect.h + 0.001) {
-        const s = score(rect, pw, ph);
-        if (s < bestScore) { bestScore = s; bestIdx = i; bestRotated = false; bestEW = pw; bestEH = ph; }
+    if (respectGrain) {
+      // Grain-correct: part.height (grain dim) runs along sheet long side.
+      // For standard 96×48 (sheetW >= sheetH): height runs horizontal = "rotated" in packer terms.
+      const grainHorizontal = sheetW >= sheetH;
+      const grainEW = grainHorizontal ? rw : pw;
+      const grainEH = grainHorizontal ? rh : ph;
+      const grainRot = grainHorizontal;
+
+      // Pass 1: grain-correct orientation only
+      for (let i = 0; i < freeRects.length; i++) {
+        const rect = freeRects[i];
+        if (grainEW <= rect.w + 0.001 && grainEH <= rect.h + 0.001) {
+          const s = score(rect, grainEW, grainEH);
+          if (s < bestScore) { bestScore = s; bestIdx = i; bestRotated = grainRot; bestEW = grainEW; bestEH = grainEH; }
+        }
       }
-      if (allowRotation && rw <= rect.w + 0.001 && rh <= rect.h + 0.001) {
-        const s = score(rect, rw, rh);
-        if (s < bestScore) { bestScore = s; bestIdx = i; bestRotated = true; bestEW = rw; bestEH = rh; }
+
+      // Pass 2: fallback (grain violation) only if grain-correct didn't fit anywhere
+      if (bestIdx === -1) {
+        const flipEW = grainHorizontal ? pw : rw;
+        const flipEH = grainHorizontal ? ph : rh;
+        const flipRot = !grainRot;
+        for (let i = 0; i < freeRects.length; i++) {
+          const rect = freeRects[i];
+          if (flipEW <= rect.w + 0.001 && flipEH <= rect.h + 0.001) {
+            const s = score(rect, flipEW, flipEH);
+            if (s < bestScore) { bestScore = s; bestIdx = i; bestRotated = flipRot; bestEW = flipEW; bestEH = flipEH; grainViolation = true; }
+          }
+        }
+      }
+    } else {
+      // Original logic: try natural then rotated
+      for (let i = 0; i < freeRects.length; i++) {
+        const rect = freeRects[i];
+        if (pw <= rect.w + 0.001 && ph <= rect.h + 0.001) {
+          const s = score(rect, pw, ph);
+          if (s < bestScore) { bestScore = s; bestIdx = i; bestRotated = false; bestEW = pw; bestEH = ph; }
+        }
+        if (allowRotation && rw <= rect.w + 0.001 && rh <= rect.h + 0.001) {
+          const s = score(rect, rw, rh);
+          if (s < bestScore) { bestScore = s; bestIdx = i; bestRotated = true; bestEW = rw; bestEH = rh; }
+        }
       }
     }
 
@@ -300,7 +340,7 @@ function createPacker(sheetW, sheetH, kerf) {
     freeRects.push(...newRects);
 
     const placement = {
-      part, x: rect.x, y: rect.y, rotated: bestRotated,
+      part, x: rect.x, y: rect.y, rotated: bestRotated, grainViolation,
       placedW: bestRotated ? part.height : part.width,
       placedH: bestRotated ? part.width : part.height,
     };
@@ -312,7 +352,7 @@ function createPacker(sheetW, sheetH, kerf) {
 }
 
 // ===== Solver =====
-function solve(parts, sheetW, sheetH, kerf, allowRotation) {
+function solve(parts, sheetW, sheetH, kerf, allowRotation, respectGrain) {
   // Group by material + thickness
   const groups = {};
   const warnings = [];
@@ -336,7 +376,7 @@ function solve(parts, sheetW, sheetH, kerf, allowRotation) {
       const pw = p.width + kerf, ph = p.height + kerf;
       const rw = p.height + kerf, rh = p.width + kerf;
       const fitsN = pw <= sheetW + 0.001 && ph <= sheetH + 0.001;
-      const fitsR = allowRotation && rw <= sheetW + 0.001 && rh <= sheetH + 0.001;
+      const fitsR = rw <= sheetW + 0.001 && rh <= sheetH + 0.001;
       if (fitsN || fitsR) placeable.push(p);
       else warnings.push(`"${p.partId}" (${p.width}" x ${p.height}") exceeds sheet size`);
     });
@@ -356,7 +396,7 @@ function solve(parts, sheetW, sheetH, kerf, allowRotation) {
         if (packer.tryPlace(part, allowRotation)) { placed = true; break; }
       }
       if (!placed) {
-        const packer = createPacker(sheetW, sheetH, kerf);
+        const packer = createPacker(sheetW, sheetH, kerf, respectGrain);
         if (packer.tryPlace(part, allowRotation)) sheets.push(packer);
         else warnings.push(`Could not place "${part.partId}"`);
       }
@@ -365,6 +405,9 @@ function solve(parts, sheetW, sheetH, kerf, allowRotation) {
     const sheetLayouts = sheets.map((packer, i) => {
       const usedArea = packer.placements.reduce((s, p) => s + p.placedW * p.placedH, 0);
       const totalArea = sheetW * sheetH;
+      packer.placements.forEach(pp => {
+        if (pp.grainViolation) warnings.push(`"${pp.part.partId}": grain reversed — couldn't fit grain-aligned on sheet ${i + 1}`);
+      });
       return {
         index: i + 1,
         placements: packer.placements,
@@ -411,9 +454,18 @@ function buildColorMap(sheets) {
 
 function esc(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-function renderSVG(layout, sheetW, sheetH, colorMap) {
+function renderSVG(layout, sheetW, sheetH, colorMap, respectGrain) {
   const sw = sheetW * SCALE, sh = sheetH * SCALE, pad = 2;
   let parts = '';
+
+  // Subtle grain lines drawn behind parts
+  let grainLines = '';
+  if (respectGrain) {
+    for (let i = 1; i <= 5; i++) {
+      const gy = (sh * i / 6).toFixed(1);
+      grainLines += `<line x1="0" y1="${gy}" x2="${sw}" y2="${gy}" stroke="#c4a265" stroke-width="0.7" opacity="0.2"/>`;
+    }
+  }
 
   layout.placements.forEach(pp => {
     const color = colorMap[pp.part.cabId] || '#ccc';
@@ -423,7 +475,10 @@ function renderSVG(layout, sheetW, sheetH, colorMap) {
     parts += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${color}" fill-opacity="0.7" stroke="#333" stroke-width="1"/>`;
 
     const label = esc(pp.part.partId);
-    const dim = `${pp.placedW.toFixed(2)}" x ${pp.placedH.toFixed(2)}"${pp.rotated ? ' (R)' : ''}`;
+    let marker = '';
+    if (respectGrain) { if (pp.grainViolation) marker = ' ⚠'; }
+    else { if (pp.rotated) marker = ' (R)'; }
+    const dim = `${pp.placedW.toFixed(2)}" x ${pp.placedH.toFixed(2)}"${marker}`;
 
     if (w > 50 && h > 30) {
       const cx = x + w/2, cy = y + h/2;
@@ -436,10 +491,11 @@ function renderSVG(layout, sheetW, sheetH, colorMap) {
     }
   });
 
+  const grainLabel = respectGrain ? ` \u2014 Grain \u2192` : '';
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${sw+pad*2}" height="${sh+pad*2+14}" viewBox="${-pad} ${-pad} ${sw+pad*2} ${sh+pad*2+14}">
 <rect x="0" y="0" width="${sw}" height="${sh}" fill="#f5f0e8" stroke="#666" stroke-width="2"/>
-<text x="${sw/2}" y="${sh+12}" font-size="9" fill="#999" text-anchor="middle" font-family="sans-serif">${sheetW}" x ${sheetH}"</text>
-${parts}
+${grainLines}${parts}
+<text x="${sw/2}" y="${sh+12}" font-size="9" fill="#999" text-anchor="middle" font-family="sans-serif">${sheetW}" x ${sheetH}"${grainLabel}</text>
 </svg>`;
 }
 
@@ -501,8 +557,9 @@ function runOptimize() {
   const kerfVal = parseFloat(document.getElementById('kerf').value);
   const kerf = isNaN(kerfVal) ? 0.125 : kerfVal;
   const allowRot = document.getElementById('allowRot').checked;
+  const respectGrain = document.getElementById('respectGrain').checked;
 
-  const { results, warnings, grandParts, grandSheets, grandWaste, materialCount } = solve(loadedParts, sheetW, sheetH, kerf, allowRot);
+  const { results, warnings, grandParts, grandSheets, grandWaste, materialCount } = solve(loadedParts, sheetW, sheetH, kerf, allowRot, respectGrain);
 
   const allWarnings = [...loadedWarnings, ...warnings];
 
@@ -549,15 +606,18 @@ function runOptimize() {
 
     // Sheets
     mat.sheets.forEach(sh => {
-      const svg = renderSVG(sh, sheetW, sheetH, colorMap);
+      const svg = renderSVG(sh, sheetW, sheetH, colorMap, respectGrain);
       html += `<div class="sheet-card"><h3>Sheet ${sh.index} of ${mat.totalSheets} <span class="sheet-waste">${sh.wastePct}% waste</span></h3>`;
       html += `<div class="svg-wrap">${svg}</div>`;
 
       // Cut list
       html += `<details><summary>Cut List (${sh.placements.length} parts)</summary>`;
-      html += '<table class="cl-table"><thead><tr><th>Part ID</th><th>Cabinet</th><th>Width</th><th>Height</th><th>Rotated</th></tr></thead><tbody>';
+      html += '<table class="cl-table"><thead><tr><th>Part ID</th><th>Cabinet</th><th>Width</th><th>Height</th><th>Notes</th></tr></thead><tbody>';
       sh.placements.forEach(pp => {
-        html += `<tr><td>${esc(pp.part.partId)}</td><td>${esc(pp.part.cabId)}</td><td>${pp.placedW.toFixed(3)}"</td><td>${pp.placedH.toFixed(3)}"</td><td>${pp.rotated?'Yes':''}</td></tr>`;
+        let note = '';
+        if (respectGrain) { note = pp.grainViolation ? '⚠ Grain reversed' : ''; }
+        else { note = pp.rotated ? 'Rotated' : ''; }
+        html += `<tr><td>${esc(pp.part.partId)}</td><td>${esc(pp.part.cabId)}</td><td>${pp.placedW.toFixed(3)}"</td><td>${pp.placedH.toFixed(3)}"</td><td>${note}</td></tr>`;
       });
       html += '</tbody></table></details>';
       html += '</div>';
