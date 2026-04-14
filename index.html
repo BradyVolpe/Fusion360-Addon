@@ -56,10 +56,36 @@ main { max-width: 1200px; margin: 2rem auto; padding: 0 1.5rem; }
 .stat-val { display: block; font-size: 2rem; font-weight: 700; color: var(--primary); }
 .stat-lbl { font-size: .85rem; color: var(--muted); }
 
-/* Material tabs */
+/* Mode comparison cards */
+.mode-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.mode-card { background: var(--card); border-radius: var(--radius); box-shadow: 0 1px 4px rgba(0,0,0,.08); padding: 1rem 1.25rem; border: 2px solid transparent; cursor: pointer; transition: .15s; }
+.mode-card:hover { border-color: var(--primary-light); }
+.mode-card.active { border-color: var(--primary); background: #f0f7f0; }
+.mode-card h4 { font-size: .95rem; margin-bottom: .5rem; color: var(--primary); }
+.mode-card .big { font-size: 1.6rem; font-weight: 700; }
+.mode-card .sub { font-size: .85rem; color: var(--muted); margin-top: .1rem; }
+.mode-card .best-badge { display: inline-block; background: var(--primary); color: #fff; font-size: .7rem; padding: .1rem .45rem; border-radius: 10px; margin-left: .4rem; vertical-align: middle; }
+
+/* Primary mode tabs */
+.mode-tabs { display: flex; gap: .25rem; margin-bottom: 1rem; flex-wrap: wrap; border-bottom: 2px solid var(--border); padding-bottom: 0; }
+.mode-tab { padding: .6rem 1.4rem; border: 2px solid transparent; border-bottom: none; border-radius: var(--radius) var(--radius) 0 0; background: transparent; cursor: pointer; font-size: .95rem; font-weight: 600; color: var(--muted); margin-bottom: -2px; }
+.mode-tab:hover { color: var(--primary); }
+.mode-tab.active { background: var(--card); border-color: var(--border); border-bottom-color: var(--card); color: var(--primary); }
+
+/* Material tabs (nested) */
 .tabs { display: flex; gap: .25rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
 .tab { padding: .5rem 1.2rem; border: 2px solid var(--border); border-bottom: none; border-radius: var(--radius) var(--radius) 0 0; background: #eee; cursor: pointer; font-size: .9rem; font-weight: 600; }
 .tab.active { background: var(--card); border-color: var(--primary); color: var(--primary); }
+
+/* Cut sequence panel */
+.cut-seq { font-size: .85rem; margin-top: .5rem; padding-left: .5rem; }
+.cut-seq ol { padding-left: 1.5rem; }
+.cut-seq li { padding: .15rem 0; }
+.cut-seq .strip-header { font-weight: 600; margin-top: .75rem; margin-bottom: .25rem; color: var(--primary); font-size: .9rem; }
+.cut-seq .rip { color: #b45309; }
+.cut-seq .cross { color: #0369a1; }
+.cut-seq .subrip { color: #7c3aed; }
+.cut-seq .waste { color: var(--muted); font-style: italic; }
 
 /* Material header */
 .mat-header h2 { font-size: 1.2rem; margin-bottom: .25rem; }
@@ -438,6 +464,366 @@ function solve(parts, sheetW, sheetH, kerf, allowRotation, respectGrain) {
   return { results, warnings, grandParts, grandSheets, grandWaste, materialCount: results.length };
 }
 
+// ===== Strict 2-Stage (Table Saw) Solver =====
+// Groups parts by width into strips. Each strip runs along grain (sheetW, 96").
+// Every part in a strip shares the same strip width. Strips are packed into sheets via FFD on sheetH.
+function solveStrict2Stage(parts, sheetW, sheetH, kerf) {
+  const groups = {};
+  const warnings = [];
+  parts.forEach(p => {
+    const key = `${p.material}|${round4(p.thickness)}`;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(p);
+  });
+
+  const results = [];
+
+  for (const key of Object.keys(groups).sort()) {
+    const groupParts = groups[key];
+    const material = groupParts[0].material;
+    const thickness = groupParts[0].thickness;
+
+    const placeable = [];
+    groupParts.forEach(p => {
+      if (p.height + kerf <= sheetW + 0.001 && p.width + kerf <= sheetH + 0.001) {
+        placeable.push(p);
+      } else {
+        warnings.push(`"${p.partId}" (${p.width}" x ${p.height}") doesn't fit grain-correct on sheet`);
+      }
+    });
+
+    // Bucket by part.width (across-grain dim) with small tolerance
+    const wTol = 0.0625;
+    const widthBuckets = [];
+    placeable.forEach(p => {
+      let bucket = widthBuckets.find(b => Math.abs(b.width - p.width) <= wTol);
+      if (!bucket) { bucket = { width: p.width, parts: [] }; widthBuckets.push(bucket); }
+      bucket.parts.push(p);
+    });
+
+    // Build strips: FFD by height within each bucket
+    const allStrips = [];
+    widthBuckets.forEach(bucket => {
+      const ps = bucket.parts.slice().sort((a, b) => b.height - a.height);
+      const strips = [];
+      ps.forEach(p => {
+        let placed = false;
+        for (const strip of strips) {
+          const gap = strip.parts.length > 0 ? kerf : 0;
+          if (strip.usedLength + gap + p.height <= sheetW + 0.001) {
+            const offset = strip.usedLength + gap;
+            strip.parts.push({ part: p, offsetAlongStrip: offset });
+            strip.usedLength = offset + p.height;
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) {
+          const strip = { width: bucket.width, parts: [], usedLength: 0, subParts: [] };
+          strip.parts.push({ part: p, offsetAlongStrip: 0 });
+          strip.usedLength = p.height;
+          strips.push(strip);
+        }
+      });
+      allStrips.push(...strips);
+    });
+
+    // Pack strips into sheets (FFD on sheetH)
+    allStrips.sort((a, b) => b.width - a.width);
+    const packedSheets = [];
+    allStrips.forEach(strip => {
+      let placed = false;
+      for (const sheet of packedSheets) {
+        const gap = sheet.strips.length > 0 ? kerf : 0;
+        if (sheet.usedHeight + gap + strip.width <= sheetH + 0.001) {
+          const yOffset = sheet.usedHeight + gap;
+          sheet.strips.push({ strip, yOffset });
+          sheet.usedHeight = yOffset + strip.width;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        packedSheets.push({ strips: [{ strip, yOffset: 0 }], usedHeight: strip.width });
+      }
+    });
+
+    const sheetLayouts = packedSheets.map((sheet, i) => {
+      const placements = [];
+      sheet.strips.forEach(({ strip, yOffset }) => {
+        strip.parts.forEach(({ part, offsetAlongStrip }) => {
+          placements.push({
+            part, x: offsetAlongStrip, y: yOffset,
+            rotated: true, grainViolation: false,
+            placedW: part.height, placedH: part.width,
+          });
+        });
+        strip.subParts.forEach(({ part, xOff, yOff, placedW, placedH }) => {
+          placements.push({
+            part, x: xOff, y: yOffset + yOff,
+            rotated: true, grainViolation: false,
+            placedW, placedH, subRipped: true,
+          });
+        });
+      });
+      const usedArea = placements.reduce((s, p) => s + p.placedW * p.placedH, 0);
+      const totalArea = sheetW * sheetH;
+      return {
+        index: i + 1, placements, strips: sheet.strips,
+        usedArea, totalArea,
+        wastePct: ((totalArea - usedArea) / totalArea * 100).toFixed(1),
+      };
+    });
+
+    const totalParts = sheetLayouts.reduce((s, sh) => s + sh.placements.length, 0);
+    const totalSheetArea = sheetLayouts.length * sheetW * sheetH;
+    const totalUsedArea = sheetLayouts.reduce((s, sh) => s + sh.usedArea, 0);
+
+    results.push({
+      material, thickness, sheets: sheetLayouts,
+      totalParts, totalSheets: sheetLayouts.length,
+      wastePct: totalSheetArea > 0 ? ((totalSheetArea - totalUsedArea) / totalSheetArea * 100).toFixed(1) : '0.0',
+      partsSqFt: (totalUsedArea / 144).toFixed(1),
+      sheetSqFt: (totalSheetArea / 144).toFixed(1),
+    });
+  }
+
+  const grandParts = results.reduce((s, r) => s + r.totalParts, 0);
+  const grandSheets = results.reduce((s, r) => s + r.totalSheets, 0);
+  const gSheetArea = results.reduce((s, r) => s + r.totalSheets * sheetW * sheetH, 0);
+  const gUsedArea = results.reduce((s, r) => s + r.sheets.reduce((ss, sh) => ss + sh.usedArea, 0), 0);
+  const grandWaste = gSheetArea > 0 ? ((gSheetArea - gUsedArea) / gSheetArea * 100).toFixed(1) : '0.0';
+
+  return { results, warnings, grandParts, grandSheets, grandWaste, materialCount: results.length };
+}
+
+// ===== Relaxed 2-Stage (Table Saw + sub-rip) Solver =====
+// Same strip idea, but after the primary FFD pack, try to move parts from
+// "lonely" narrow strips into the leftover tail of wider strips via sub-ripping.
+function solveRelaxed2Stage(parts, sheetW, sheetH, kerf) {
+  // Start with strict result, then post-process each material group
+  const strict = solveStrict2Stage(parts, sheetW, sheetH, kerf);
+
+  strict.results.forEach(mat => {
+    // Collect all strips across sheets so we can migrate parts
+    const allStrips = [];
+    mat.sheets.forEach(sh => sh.strips.forEach(se => allStrips.push({ ...se, sheetRef: sh })));
+
+    // For each strip, compute leftover tail (unused length after primary parts)
+    // Try to move parts from strips with fewest parts into leftover tails of wider strips.
+    // Sub-rip model: within a strip of width stripW, leftover tail is (sheetW - usedLength - kerf) × stripW.
+    // We can place a part there if part.height + kerf <= tailLen AND part.width + kerf <= stripW.
+    // Within the tail, multiple parts may stack across-width (sub-rip cuts parallel to length).
+
+    // Sort strips by width desc (biggest first, as donors-of-leftover)
+    const donorStrips = allStrips.slice().sort((a, b) => b.strip.width - a.strip.width);
+
+    // Iterate strips with the fewest parts first as candidates to drain
+    const candidateStrips = allStrips.slice().sort((a, b) => a.strip.parts.length - b.strip.parts.length);
+
+    candidateStrips.forEach(candidate => {
+      if (candidate.strip.parts.length === 0) return;
+      // Try to relocate each part in this candidate strip into a donor's tail
+      const remaining = [];
+      candidate.strip.parts.forEach(({ part }) => {
+        let moved = false;
+        for (const donor of donorStrips) {
+          if (donor === candidate) continue;
+          const stripW = donor.strip.width;
+          if (part.width + kerf > stripW + 0.001) continue;
+          const tailStart = donor.strip.usedLength + (donor.strip.parts.length > 0 ? kerf : 0);
+          // Sub-rip tracking: donor.strip.subRipStackY = vertical usage within the tail column at current sub-length
+          // Simpler: treat each sub-ripped part as its own column at tailStart (append sequentially like primary parts)
+          // If a part fits by length at tailStart, place it there and update a separate subTailEnd marker
+          if (!donor.strip.subTailEnd) donor.strip.subTailEnd = tailStart;
+          // Check if part fits past current subTailEnd
+          const gap = donor.strip.subTailEnd > tailStart ? kerf : 0;
+          const newEnd = donor.strip.subTailEnd + gap + part.height;
+          if (newEnd <= sheetW + 0.001 && part.width + kerf <= stripW + 0.001) {
+            donor.strip.subParts.push({
+              part, xOff: donor.strip.subTailEnd + gap, yOff: 0,
+              placedW: part.height, placedH: part.width,
+            });
+            donor.strip.subTailEnd = newEnd;
+            moved = true;
+            break;
+          }
+        }
+        if (!moved) remaining.push({ part, keep: true });
+      });
+
+      // If ALL parts moved, empty the candidate strip (so we can drop it)
+      if (remaining.length === 0) {
+        candidate.strip.parts = [];
+        candidate.strip.usedLength = 0;
+      }
+    });
+
+    // Rebuild sheets — drop empty strips, re-pack into sheets
+    const keptStrips = [];
+    mat.sheets.forEach(sh => {
+      sh.strips.forEach(se => {
+        if (se.strip.parts.length > 0 || se.strip.subParts.length > 0) {
+          keptStrips.push(se.strip);
+        }
+      });
+    });
+
+    keptStrips.sort((a, b) => b.width - a.width);
+    const packedSheets = [];
+    keptStrips.forEach(strip => {
+      let placed = false;
+      for (const sheet of packedSheets) {
+        const gap = sheet.strips.length > 0 ? kerf : 0;
+        if (sheet.usedHeight + gap + strip.width <= sheetH + 0.001) {
+          const yOffset = sheet.usedHeight + gap;
+          sheet.strips.push({ strip, yOffset });
+          sheet.usedHeight = yOffset + strip.width;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        packedSheets.push({ strips: [{ strip, yOffset: 0 }], usedHeight: strip.width });
+      }
+    });
+
+    const sheetLayouts = packedSheets.map((sheet, i) => {
+      const placements = [];
+      sheet.strips.forEach(({ strip, yOffset }) => {
+        strip.parts.forEach(({ part, offsetAlongStrip }) => {
+          placements.push({
+            part, x: offsetAlongStrip, y: yOffset,
+            rotated: true, grainViolation: false,
+            placedW: part.height, placedH: part.width,
+          });
+        });
+        strip.subParts.forEach(({ part, xOff, yOff, placedW, placedH }) => {
+          placements.push({
+            part, x: xOff, y: yOffset + yOff,
+            rotated: true, grainViolation: false,
+            placedW, placedH, subRipped: true,
+          });
+        });
+      });
+      const usedArea = placements.reduce((s, p) => s + p.placedW * p.placedH, 0);
+      const totalArea = sheetW * sheetH;
+      return {
+        index: i + 1, placements, strips: sheet.strips,
+        usedArea, totalArea,
+        wastePct: ((totalArea - usedArea) / totalArea * 100).toFixed(1),
+      };
+    });
+
+    mat.sheets = sheetLayouts;
+    mat.totalSheets = sheetLayouts.length;
+    const totalSheetArea = sheetLayouts.length * sheetW * sheetH;
+    const totalUsedArea = sheetLayouts.reduce((s, sh) => s + sh.usedArea, 0);
+    mat.wastePct = totalSheetArea > 0 ? ((totalSheetArea - totalUsedArea) / totalSheetArea * 100).toFixed(1) : '0.0';
+    mat.partsSqFt = (totalUsedArea / 144).toFixed(1);
+    mat.sheetSqFt = (totalSheetArea / 144).toFixed(1);
+  });
+
+  strict.grandSheets = strict.results.reduce((s, r) => s + r.totalSheets, 0);
+  const gSheetArea = strict.results.reduce((s, r) => s + r.totalSheets * sheetW * sheetH, 0);
+  const gUsedArea = strict.results.reduce((s, r) => s + r.sheets.reduce((ss, sh) => ss + sh.usedArea, 0), 0);
+  strict.grandWaste = gSheetArea > 0 ? ((gSheetArea - gUsedArea) / gSheetArea * 100).toFixed(1) : '0.0';
+  return strict;
+}
+
+// ===== Cut Sequence Generator =====
+// Walks a table-saw layout top-down to produce numbered rip + crosscut steps.
+function generateCutSequence(sheetLayout, sheetW, sheetH, kerf, mode) {
+  const steps = [];
+  const strips = sheetLayout.strips || [];
+  if (strips.length === 0) return steps;
+
+  // Sort strips top-to-bottom (by yOffset)
+  const sortedStrips = strips.slice().sort((a, b) => a.yOffset - b.yOffset);
+
+  // RIPS (parallel to grain) — position = distance from TOP edge
+  sortedStrips.forEach((se, i) => {
+    const cutPos = se.yOffset + se.strip.width;
+    const isLast = i === sortedStrips.length - 1;
+    steps.push({
+      kind: 'rip',
+      pos: cutPos,
+      label: `Rip at ${cutPos.toFixed(3)}" from top → Strip ${i+1} (${se.strip.width.toFixed(3)}" wide × ${sheetW}" long)`,
+    });
+  });
+
+  const lastStrip = sortedStrips[sortedStrips.length - 1];
+  const lastEdge = lastStrip.yOffset + lastStrip.strip.width;
+  if (lastEdge < sheetH - 0.01) {
+    steps.push({
+      kind: 'waste',
+      label: `Remaining ${(sheetH - lastEdge).toFixed(3)}" at bottom is waste`,
+    });
+  }
+
+  // CROSSCUTS per strip
+  sortedStrips.forEach((se, i) => {
+    const strip = se.strip;
+    steps.push({
+      kind: 'strip-header',
+      label: `Strip ${i+1} (${strip.width.toFixed(3)}" wide):`,
+      stripNum: i + 1,
+    });
+    const partsSorted = strip.parts.slice().sort((a, b) => a.offsetAlongStrip - b.offsetAlongStrip);
+    partsSorted.forEach((pe, j) => {
+      const endPos = pe.offsetAlongStrip + pe.part.height;
+      steps.push({
+        kind: 'crosscut',
+        pos: endPos,
+        label: `Crosscut at ${endPos.toFixed(3)}" → ${pe.part.partId} (${pe.part.height.toFixed(3)}" × ${pe.part.width.toFixed(3)}")`,
+      });
+    });
+    // Sub-rips (relaxed mode only)
+    if (strip.subParts && strip.subParts.length > 0) {
+      const subSorted = strip.subParts.slice().sort((a, b) => a.xOff - b.xOff);
+      subSorted.forEach(sp => {
+        const endPos = sp.xOff + sp.placedW;
+        steps.push({
+          kind: 'subrip',
+          pos: endPos,
+          label: `Sub-rip: Crosscut at ${endPos.toFixed(3)}", then rip to ${sp.placedH.toFixed(3)}" → ${sp.part.partId}`,
+        });
+      });
+    }
+    // Waste at end of strip
+    const tailStart = strip.usedLength;
+    const subEnd = strip.subTailEnd || tailStart;
+    const stripWasteStart = Math.max(tailStart, subEnd);
+    if (stripWasteStart < sheetW - 0.01) {
+      steps.push({
+        kind: 'waste',
+        label: `  Remaining ${(sheetW - stripWasteStart).toFixed(3)}" at end of strip is waste`,
+      });
+    }
+  });
+
+  return steps;
+}
+
+function renderCutSequence(steps) {
+  if (!steps || steps.length === 0) return '';
+  let html = '<div class="cut-seq"><ol>';
+  let stepNum = 0;
+  steps.forEach(s => {
+    if (s.kind === 'strip-header') {
+      html += `</ol><div class="strip-header">${esc(s.label)}</div><ol start="${stepNum + 1}">`;
+    } else if (s.kind === 'waste') {
+      html += `<li class="waste">${esc(s.label)}</li>`;
+    } else {
+      stepNum++;
+      const cls = s.kind === 'rip' ? 'rip' : s.kind === 'crosscut' ? 'cross' : s.kind === 'subrip' ? 'subrip' : '';
+      html += `<li class="${cls}">${esc(s.label)}</li>`;
+    }
+  });
+  html += '</ol></div>';
+  return html;
+}
+
 // ===== SVG Renderer =====
 const COLORS = ['#4E79A7','#F28E2B','#E15759','#76B7B2','#59A14F','#EDC948','#B07AA1','#FF9DA7','#9C755F','#BAB0AC','#86BCB6','#8CD17D','#B6992D','#499894'];
 const SCALE = 7;
@@ -549,6 +935,10 @@ function handleFile() {
 
 optimizeBtn.addEventListener('click', runOptimize);
 
+// Global state for mode switching
+let modeResults = {};
+let modeCtx = {};
+
 function runOptimize() {
   if (!loadedParts.length) return;
 
@@ -559,79 +949,145 @@ function runOptimize() {
   const allowRot = document.getElementById('allowRot').checked;
   const respectGrain = document.getElementById('respectGrain').checked;
 
-  const { results, warnings, grandParts, grandSheets, grandWaste, materialCount } = solve(loadedParts, sheetW, sheetH, kerf, allowRot, respectGrain);
+  // Run all three solvers
+  modeResults = {
+    optimized: solve(loadedParts, sheetW, sheetH, kerf, allowRot, respectGrain),
+    strict: solveStrict2Stage(loadedParts, sheetW, sheetH, kerf),
+    relaxed: solveRelaxed2Stage(loadedParts, sheetW, sheetH, kerf),
+  };
+  modeCtx = { sheetW, sheetH, kerf, respectGrain };
 
-  const allWarnings = [...loadedWarnings, ...warnings];
+  const allWarnings = [...loadedWarnings, ...modeResults.optimized.warnings];
 
   let html = '';
 
-  // Warnings
   if (allWarnings.length) {
     html += '<div class="warn-box"><h3>Warnings</h3><ul>';
     allWarnings.forEach(w => html += `<li>${esc(w)}</li>`);
     html += '</ul></div>';
   }
 
-  // Summary bar
+  // 3-card mode comparison
+  const modes = [
+    { key: 'optimized', title: 'Optimized', sub: 'Guillotine, minimum waste' },
+    { key: 'strict', title: 'Strict Table Saw', sub: 'Rips + crosscuts only' },
+    { key: 'relaxed', title: 'Relaxed Table Saw', sub: 'Rips + crosscuts + sub-rips' },
+  ];
+
+  // Determine best (fewest sheets, then lowest waste)
+  let bestKey = 'optimized';
+  modes.forEach(m => {
+    const r = modeResults[m.key];
+    const b = modeResults[bestKey];
+    if (r.grandSheets < b.grandSheets ||
+        (r.grandSheets === b.grandSheets && parseFloat(r.grandWaste) < parseFloat(b.grandWaste))) {
+      bestKey = m.key;
+    }
+  });
+
+  html += '<div class="mode-compare">';
+  modes.forEach(m => {
+    const r = modeResults[m.key];
+    const best = m.key === bestKey ? '<span class="best-badge">Best</span>' : '';
+    html += `<div class="mode-card${m.key==='optimized'?' active':''}" data-mode="${m.key}" onclick="showMode('${m.key}')">
+      <h4>${esc(m.title)}${best}</h4>
+      <div class="big">${r.grandSheets} sheet${r.grandSheets!==1?'s':''}</div>
+      <div class="sub">${r.grandWaste}% waste</div>
+      <div class="sub" style="margin-top:.4rem">${esc(m.sub)}</div>
+    </div>`;
+  });
+  html += '</div>';
+
+  // Primary mode tabs
+  html += '<div class="mode-tabs">';
+  modes.forEach(m => {
+    html += `<div class="mode-tab${m.key==='optimized'?' active':''}" data-mode="${m.key}" onclick="showMode('${m.key}')">${esc(m.title)}</div>`;
+  });
+  html += '</div>';
+
+  // Per-mode container (rendered on demand)
+  html += '<div id="mode-content"></div>';
+
+  html += '<div class="actions"><button class="btn" onclick="window.print()">🖨️ Print Results</button><button class="btn btn-outline" onclick="resetUI()">New Optimization</button></div>';
+
+  resultsDiv.innerHTML = html;
+  resultsDiv.style.display = 'block';
+  renderModeLayout('optimized');
+  resultsDiv.scrollIntoView({ behavior: 'smooth' });
+}
+
+function showMode(modeKey) {
+  document.querySelectorAll('.mode-card').forEach(el => el.classList.toggle('active', el.dataset.mode === modeKey));
+  document.querySelectorAll('.mode-tab').forEach(el => el.classList.toggle('active', el.dataset.mode === modeKey));
+  renderModeLayout(modeKey);
+}
+
+function renderModeLayout(modeKey) {
+  const { sheetW, sheetH, kerf, respectGrain } = modeCtx;
+  const data = modeResults[modeKey];
+  const isTableSaw = modeKey === 'strict' || modeKey === 'relaxed';
+  // Table saw modes always grain-correct; optimized respects user setting
+  const renderGrain = isTableSaw ? true : respectGrain;
+
+  let html = '';
   html += `<div class="summary">
-    <div class="stat"><span class="stat-val">${grandParts}</span><span class="stat-lbl">Total Parts</span></div>
-    <div class="stat"><span class="stat-val">${grandSheets}</span><span class="stat-lbl">Total Sheets</span></div>
-    <div class="stat"><span class="stat-val">${grandWaste}%</span><span class="stat-lbl">Overall Waste</span></div>
-    <div class="stat"><span class="stat-val">${materialCount}</span><span class="stat-lbl">Material Groups</span></div>
+    <div class="stat"><span class="stat-val">${data.grandParts}</span><span class="stat-lbl">Total Parts</span></div>
+    <div class="stat"><span class="stat-val">${data.grandSheets}</span><span class="stat-lbl">Total Sheets</span></div>
+    <div class="stat"><span class="stat-val">${data.grandWaste}%</span><span class="stat-lbl">Overall Waste</span></div>
+    <div class="stat"><span class="stat-val">${data.materialCount}</span><span class="stat-lbl">Material Groups</span></div>
   </div>`;
 
-  // Material tabs (only if >1)
-  if (results.length > 1) {
+  if (data.results.length > 1) {
     html += '<div class="tabs">';
-    results.forEach((r, i) => {
+    data.results.forEach((r, i) => {
       html += `<div class="tab${i===0?' active':''}" onclick="showMatTab(${i})">${esc(r.material)} <small>(${fractionStr(r.thickness)})</small></div>`;
     });
     html += '</div>';
   }
 
-  // Material sections
-  results.forEach((mat, mi) => {
+  data.results.forEach((mat, mi) => {
     const colorMap = buildColorMap(mat.sheets);
 
     html += `<div class="mat-section" id="mat-${mi}" ${mi>0?'style="display:none"':''}>`;
     html += `<div class="mat-header"><h2>${esc(mat.material)} — ${fractionStr(mat.thickness)} thick</h2>`;
     html += `<div class="mat-stats">${mat.totalParts} parts on ${mat.totalSheets} sheet${mat.totalSheets!==1?'s':''} — ${mat.wastePct}% waste — ${mat.partsSqFt} / ${mat.sheetSqFt} sq ft</div></div>`;
 
-    // Legend
     html += '<div class="legend">';
     for (const [cabId, color] of Object.entries(colorMap)) {
       html += `<span class="legend-item"><span class="legend-sw" style="background:${color}"></span>${esc(cabId)}</span>`;
     }
     html += '</div>';
 
-    // Sheets
     mat.sheets.forEach(sh => {
-      const svg = renderSVG(sh, sheetW, sheetH, colorMap, respectGrain);
+      const svg = renderSVG(sh, sheetW, sheetH, colorMap, renderGrain);
       html += `<div class="sheet-card"><h3>Sheet ${sh.index} of ${mat.totalSheets} <span class="sheet-waste">${sh.wastePct}% waste</span></h3>`;
       html += `<div class="svg-wrap">${svg}</div>`;
 
-      // Cut list
       html += `<details><summary>Cut List (${sh.placements.length} parts)</summary>`;
       html += '<table class="cl-table"><thead><tr><th>Part ID</th><th>Cabinet</th><th>Width</th><th>Height</th><th>Notes</th></tr></thead><tbody>';
       sh.placements.forEach(pp => {
         let note = '';
-        if (respectGrain) { note = pp.grainViolation ? '⚠ Grain reversed' : ''; }
-        else { note = pp.rotated ? 'Rotated' : ''; }
+        if (pp.subRipped) note = 'Sub-rip';
+        else if (renderGrain) note = pp.grainViolation ? '⚠ Grain reversed' : '';
+        else note = pp.rotated ? 'Rotated' : '';
         html += `<tr><td>${esc(pp.part.partId)}</td><td>${esc(pp.part.cabId)}</td><td>${pp.placedW.toFixed(3)}"</td><td>${pp.placedH.toFixed(3)}"</td><td>${note}</td></tr>`;
       });
       html += '</tbody></table></details>';
+
+      if (isTableSaw && sh.strips) {
+        const steps = generateCutSequence(sh, sheetW, sheetH, kerf, modeKey);
+        html += `<details open><summary>Cut Sequence (${steps.filter(s => s.kind !== 'strip-header' && s.kind !== 'waste').length} cuts)</summary>`;
+        html += renderCutSequence(steps);
+        html += '</details>';
+      }
+
       html += '</div>';
     });
 
     html += '</div>';
   });
 
-  // Actions
-  html += '<div class="actions"><button class="btn" onclick="window.print()">🖨️ Print Results</button><button class="btn btn-outline" onclick="resetUI()">New Optimization</button></div>';
-
-  resultsDiv.innerHTML = html;
-  resultsDiv.style.display = 'block';
-  resultsDiv.scrollIntoView({ behavior: 'smooth' });
+  document.getElementById('mode-content').innerHTML = html;
 }
 
 function showMatTab(idx) {
