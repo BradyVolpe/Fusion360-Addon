@@ -86,6 +86,7 @@ main { max-width: 1200px; margin: 2rem auto; padding: 0 1.5rem; }
 .cut-seq .cross { color: #0369a1; }
 .cut-seq .subrip { color: #7c3aed; }
 .cut-seq .waste { color: var(--muted); font-style: italic; }
+.cut-seq .waste-note { color: var(--muted); font-style: italic; padding-left: 1.5rem; margin: .15rem 0; }
 
 /* Material header */
 .mat-header h2 { font-size: 1.2rem; margin-bottom: .25rem; }
@@ -190,6 +191,18 @@ footer { text-align: center; padding: 2rem; color: var(--muted); font-size: .85r
           <label for="allowRot" style="margin:0">Allow rotation (90°)</label>
         </div>
         <span class="setting-hint">Only applies when grain lock is off</span>
+      </div>
+      <div class="setting">
+        <div class="cb-setting">
+          <input type="checkbox" id="edgeCleanup" checked>
+          <label for="edgeCleanup" style="margin:0">Clean up factory edges</label>
+        </div>
+        <span class="setting-hint">Rips a strip off all 4 edges</span>
+      </div>
+      <div class="setting">
+        <label>Trim Amount (in)</label>
+        <input type="number" id="trimAmount" value="0.25" step="0.0625" min="0">
+        <span class="setting-hint">Typical: 1/4″ (0.25)</span>
       </div>
     </div>
 
@@ -733,35 +746,45 @@ function solveRelaxed2Stage(parts, sheetW, sheetH, kerf) {
 
 // ===== Cut Sequence Generator =====
 // Walks a table-saw layout top-down to produce numbered rip + crosscut steps.
-function generateCutSequence(sheetLayout, sheetW, sheetH, kerf, mode) {
+function generateCutSequence(sheetLayout, sheetW, sheetH, kerf, mode, trim) {
   const steps = [];
   const strips = sheetLayout.strips || [];
   if (strips.length === 0) return steps;
+  const t = trim || 0;
+  const effW = sheetW - 2 * t;
+  const effH = sheetH - 2 * t;
 
-  // Sort strips top-to-bottom (by yOffset)
+  // Edge cleanup — performed first, before any part-placement cuts
+  if (t > 0) {
+    steps.push({ kind: 'rip', label: `Edge cleanup: Rip ${t.toFixed(3)}" off top factory edge` });
+    steps.push({ kind: 'rip', label: `Edge cleanup: Rip ${t.toFixed(3)}" off bottom factory edge` });
+    steps.push({ kind: 'crosscut', label: `Edge cleanup: Crosscut ${t.toFixed(3)}" off left factory edge` });
+    steps.push({ kind: 'crosscut', label: `Edge cleanup: Crosscut ${t.toFixed(3)}" off right factory edge` });
+  }
+
+  // Sort strips top-to-bottom (by yOffset, in effective space)
   const sortedStrips = strips.slice().sort((a, b) => a.yOffset - b.yOffset);
 
-  // RIPS (parallel to grain) — position = distance from TOP edge
+  // RIPS (parallel to grain) — position = distance from ORIGINAL top edge (include trim)
   sortedStrips.forEach((se, i) => {
-    const cutPos = se.yOffset + se.strip.width;
-    const isLast = i === sortedStrips.length - 1;
+    const cutPos = t + se.yOffset + se.strip.width;
     steps.push({
       kind: 'rip',
       pos: cutPos,
-      label: `Rip at ${cutPos.toFixed(3)}" from top → Strip ${i+1} (${se.strip.width.toFixed(3)}" wide × ${sheetW}" long)`,
+      label: `Rip at ${cutPos.toFixed(3)}" from top → Strip ${i+1} (${se.strip.width.toFixed(3)}" wide × ${effW.toFixed(3)}" long)`,
     });
   });
 
   const lastStrip = sortedStrips[sortedStrips.length - 1];
   const lastEdge = lastStrip.yOffset + lastStrip.strip.width;
-  if (lastEdge < sheetH - 0.01) {
+  if (lastEdge < effH - 0.01) {
     steps.push({
       kind: 'waste',
-      label: `Remaining ${(sheetH - lastEdge).toFixed(3)}" at bottom is waste`,
+      label: `Remaining ${(effH - lastEdge).toFixed(3)}" before bottom trim is waste`,
     });
   }
 
-  // CROSSCUTS per strip
+  // CROSSCUTS per strip — positions measured from ORIGINAL left edge (include trim)
   sortedStrips.forEach((se, i) => {
     const strip = se.strip;
     steps.push({
@@ -770,8 +793,8 @@ function generateCutSequence(sheetLayout, sheetW, sheetH, kerf, mode) {
       stripNum: i + 1,
     });
     const partsSorted = strip.parts.slice().sort((a, b) => a.offsetAlongStrip - b.offsetAlongStrip);
-    partsSorted.forEach((pe, j) => {
-      const endPos = pe.offsetAlongStrip + pe.part.height;
+    partsSorted.forEach(pe => {
+      const endPos = t + pe.offsetAlongStrip + pe.part.height;
       steps.push({
         kind: 'crosscut',
         pos: endPos,
@@ -782,7 +805,7 @@ function generateCutSequence(sheetLayout, sheetW, sheetH, kerf, mode) {
     if (strip.subParts && strip.subParts.length > 0) {
       const subSorted = strip.subParts.slice().sort((a, b) => a.xOff - b.xOff);
       subSorted.forEach(sp => {
-        const endPos = sp.xOff + sp.placedW;
+        const endPos = t + sp.xOff + sp.placedW;
         steps.push({
           kind: 'subrip',
           pos: endPos,
@@ -794,10 +817,10 @@ function generateCutSequence(sheetLayout, sheetW, sheetH, kerf, mode) {
     const tailStart = strip.usedLength;
     const subEnd = strip.subTailEnd || tailStart;
     const stripWasteStart = Math.max(tailStart, subEnd);
-    if (stripWasteStart < sheetW - 0.01) {
+    if (stripWasteStart < effW - 0.01) {
       steps.push({
         kind: 'waste',
-        label: `  Remaining ${(sheetW - stripWasteStart).toFixed(3)}" at end of strip is waste`,
+        label: `  Remaining ${(effW - stripWasteStart).toFixed(3)}" before right trim is waste`,
       });
     }
   });
@@ -813,7 +836,8 @@ function renderCutSequence(steps) {
     if (s.kind === 'strip-header') {
       html += `</ol><div class="strip-header">${esc(s.label)}</div><ol start="${stepNum + 1}">`;
     } else if (s.kind === 'waste') {
-      html += `<li class="waste">${esc(s.label)}</li>`;
+      // Close list, emit waste as non-numbered div, reopen list continuing numbering
+      html += `</ol><div class="waste-note">${esc(s.label)}</div><ol start="${stepNum + 1}">`;
     } else {
       stepNum++;
       const cls = s.kind === 'rip' ? 'rip' : s.kind === 'crosscut' ? 'cross' : s.kind === 'subrip' ? 'subrip' : '';
@@ -840,22 +864,24 @@ function buildColorMap(sheets) {
 
 function esc(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-function renderSVG(layout, sheetW, sheetH, colorMap, respectGrain) {
+function renderSVG(layout, sheetW, sheetH, colorMap, respectGrain, trim) {
   const sw = sheetW * SCALE, sh = sheetH * SCALE, pad = 2;
+  const trimPx = (trim || 0) * SCALE;
   let parts = '';
 
-  // Subtle grain lines drawn behind parts
+  // Subtle grain lines drawn behind parts (within the usable area)
   let grainLines = '';
   if (respectGrain) {
+    const innerH = sh - 2 * trimPx;
     for (let i = 1; i <= 5; i++) {
-      const gy = (sh * i / 6).toFixed(1);
-      grainLines += `<line x1="0" y1="${gy}" x2="${sw}" y2="${gy}" stroke="#c4a265" stroke-width="0.7" opacity="0.2"/>`;
+      const gy = (trimPx + innerH * i / 6).toFixed(1);
+      grainLines += `<line x1="${trimPx.toFixed(1)}" y1="${gy}" x2="${(sw - trimPx).toFixed(1)}" y2="${gy}" stroke="#c4a265" stroke-width="0.7" opacity="0.2"/>`;
     }
   }
 
   layout.placements.forEach(pp => {
     const color = colorMap[pp.part.cabId] || '#ccc';
-    const x = pp.x * SCALE, y = pp.y * SCALE;
+    const x = pp.x * SCALE + trimPx, y = pp.y * SCALE + trimPx;
     const w = pp.placedW * SCALE, h = pp.placedH * SCALE;
 
     parts += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${color}" fill-opacity="0.7" stroke="#333" stroke-width="1"/>`;
@@ -878,10 +904,25 @@ function renderSVG(layout, sheetW, sheetH, colorMap, respectGrain) {
   });
 
   const grainLabel = respectGrain ? ` \u2014 Grain \u2192` : '';
+
+  // Trim-zone overlay: 4 solid amber border strips with dashed inner boundary
+  let trimOverlay = '';
+  let trimLabel = '';
+  if (trimPx > 0) {
+    const fill = '#b45309'; // solid amber/brown for clear visibility on thin edges
+    trimOverlay =
+      `<rect x="0" y="0" width="${sw}" height="${trimPx}" fill="${fill}" opacity="0.7"/>` +
+      `<rect x="0" y="${sh - trimPx}" width="${sw}" height="${trimPx}" fill="${fill}" opacity="0.7"/>` +
+      `<rect x="0" y="${trimPx}" width="${trimPx}" height="${sh - 2 * trimPx}" fill="${fill}" opacity="0.7"/>` +
+      `<rect x="${sw - trimPx}" y="${trimPx}" width="${trimPx}" height="${sh - 2 * trimPx}" fill="${fill}" opacity="0.7"/>` +
+      `<rect x="${trimPx}" y="${trimPx}" width="${sw - 2*trimPx}" height="${sh - 2*trimPx}" fill="none" stroke="#b45309" stroke-width="1" stroke-dasharray="5 3" opacity="0.6"/>`;
+    trimLabel = ` \u2014 trim ${trim}"`;
+  }
+
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${sw+pad*2}" height="${sh+pad*2+14}" viewBox="${-pad} ${-pad} ${sw+pad*2} ${sh+pad*2+14}">
 <rect x="0" y="0" width="${sw}" height="${sh}" fill="#f5f0e8" stroke="#666" stroke-width="2"/>
-${grainLines}${parts}
-<text x="${sw/2}" y="${sh+12}" font-size="9" fill="#999" text-anchor="middle" font-family="sans-serif">${sheetW}" x ${sheetH}"${grainLabel}</text>
+${trimOverlay}${grainLines}${parts}
+<text x="${sw/2}" y="${sh+12}" font-size="9" fill="#999" text-anchor="middle" font-family="sans-serif">${sheetW}" x ${sheetH}"${grainLabel}${trimLabel}</text>
 </svg>`;
 }
 
@@ -895,6 +936,10 @@ const fileNameEl = document.getElementById('fileName');
 const optimizeBtn = document.getElementById('optimizeBtn');
 const partsPreview = document.getElementById('partsPreview');
 const resultsDiv = document.getElementById('results');
+
+document.getElementById('edgeCleanup').addEventListener('change', e => {
+  document.getElementById('trimAmount').disabled = !e.target.checked;
+});
 
 fileInput.addEventListener('change', handleFile);
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
@@ -948,14 +993,37 @@ function runOptimize() {
   const kerf = isNaN(kerfVal) ? 0.125 : kerfVal;
   const allowRot = document.getElementById('allowRot').checked;
   const respectGrain = document.getElementById('respectGrain').checked;
+  const edgeCleanup = document.getElementById('edgeCleanup').checked;
+  const trimVal = parseFloat(document.getElementById('trimAmount').value);
+  const trim = edgeCleanup && !isNaN(trimVal) && trimVal > 0 ? trimVal : 0;
+  const effW = sheetW - 2 * trim;
+  const effH = sheetH - 2 * trim;
 
-  // Run all three solvers
+  // Run all three solvers on effective (trimmed) sheet area
   modeResults = {
-    optimized: solve(loadedParts, sheetW, sheetH, kerf, allowRot, respectGrain),
-    strict: solveStrict2Stage(loadedParts, sheetW, sheetH, kerf),
-    relaxed: solveRelaxed2Stage(loadedParts, sheetW, sheetH, kerf),
+    optimized: solve(loadedParts, effW, effH, kerf, allowRot, respectGrain),
+    strict: solveStrict2Stage(loadedParts, effW, effH, kerf),
+    relaxed: solveRelaxed2Stage(loadedParts, effW, effH, kerf),
   };
-  modeCtx = { sheetW, sheetH, kerf, respectGrain };
+  // Recompute waste against the FULL sheet area (trim counts as waste)
+  if (trim > 0) {
+    Object.values(modeResults).forEach(data => {
+      data.results.forEach(mat => {
+        const fullTotalArea = mat.totalSheets * sheetW * sheetH;
+        const usedArea = mat.sheets.reduce((s, sh) => s + sh.usedArea, 0);
+        mat.wastePct = fullTotalArea > 0 ? ((fullTotalArea - usedArea) / fullTotalArea * 100).toFixed(1) : '0.0';
+        mat.sheetSqFt = (fullTotalArea / 144).toFixed(1);
+        mat.sheets.forEach(sh => {
+          const full = sheetW * sheetH;
+          sh.wastePct = ((full - sh.usedArea) / full * 100).toFixed(1);
+        });
+      });
+      const gSheetArea = data.results.reduce((s, r) => s + r.totalSheets * sheetW * sheetH, 0);
+      const gUsedArea = data.results.reduce((s, r) => s + r.sheets.reduce((ss, sh) => ss + sh.usedArea, 0), 0);
+      data.grandWaste = gSheetArea > 0 ? ((gSheetArea - gUsedArea) / gSheetArea * 100).toFixed(1) : '0.0';
+    });
+  }
+  modeCtx = { sheetW, sheetH, effW, effH, kerf, respectGrain, trim };
 
   const allWarnings = [...loadedWarnings, ...modeResults.optimized.warnings];
 
@@ -1023,7 +1091,7 @@ function showMode(modeKey) {
 }
 
 function renderModeLayout(modeKey) {
-  const { sheetW, sheetH, kerf, respectGrain } = modeCtx;
+  const { sheetW, sheetH, kerf, respectGrain, trim } = modeCtx;
   const data = modeResults[modeKey];
   const isTableSaw = modeKey === 'strict' || modeKey === 'relaxed';
   // Table saw modes always grain-correct; optimized respects user setting
@@ -1059,7 +1127,7 @@ function renderModeLayout(modeKey) {
     html += '</div>';
 
     mat.sheets.forEach(sh => {
-      const svg = renderSVG(sh, sheetW, sheetH, colorMap, renderGrain);
+      const svg = renderSVG(sh, sheetW, sheetH, colorMap, renderGrain, trim);
       html += `<div class="sheet-card"><h3>Sheet ${sh.index} of ${mat.totalSheets} <span class="sheet-waste">${sh.wastePct}% waste</span></h3>`;
       html += `<div class="svg-wrap">${svg}</div>`;
 
@@ -1075,7 +1143,7 @@ function renderModeLayout(modeKey) {
       html += '</tbody></table></details>';
 
       if (isTableSaw && sh.strips) {
-        const steps = generateCutSequence(sh, sheetW, sheetH, kerf, modeKey);
+        const steps = generateCutSequence(sh, sheetW, sheetH, kerf, modeKey, trim);
         html += `<details open><summary>Cut Sequence (${steps.filter(s => s.kind !== 'strip-header' && s.kind !== 'waste').length} cuts)</summary>`;
         html += renderCutSequence(steps);
         html += '</details>';
