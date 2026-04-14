@@ -43,9 +43,9 @@ Then in Fusion 360:
 
 Then:
 1. Drag & drop the exported CSV onto the upload area
-2. Adjust settings if needed (sheet size, kerf, rotation)
+2. Adjust settings if needed (sheet size, kerf, grain direction, edge cleanup)
 3. Click **Optimize Cut List**
-4. View and print your optimized sheet layouts
+4. Compare layouts across three cut patterns and print the one that fits your workflow
 
 ---
 
@@ -97,14 +97,47 @@ The add-in exports a CSV with these columns:
 
 ### Cut List Optimizer Features
 
-- **Guillotine bin packing** — all cuts go edge-to-edge, matching how real table saws and panel saws work
-- **Automatic grouping** — parts grouped by material and thickness (e.g., 3/4" and 1/4" plywood get separate sheet layouts)
-- **Configurable settings:**
-  - Sheet size (default: 48" x 96" / 4' x 8')
-  - Saw kerf (default: 0.125" / 1/8")
-  - Part rotation (on/off for grain direction control)
+#### Three Cut Patterns — side-by-side comparison
+
+Every run produces three layouts simultaneously. A comparison card shows sheets and waste % for each; click any card or tab to switch the view.
+
+| Mode | How it works | Trade-off |
+|------|-------------|-----------|
+| **Optimized** | Recursive guillotine packing — minimum waste | Cuts may require picking up and repositioning panels mid-sequence |
+| **Strict Table Saw** | Strips (rip → crosscut only) — every part in a strip shares the same width | Simplest cuts; some extra waste |
+| **Relaxed Table Saw** | Strips + sub-rips in the leftover tail of each strip | Fewer sheets than Strict; slightly more complex but still predictable |
+
+#### Grain Direction
+
+- The **Height** column from the Fusion 360 add-in maps to the grain (long-axis) direction of each panel
+- "Respect grain direction" (on by default) locks the grain dim to the 96″ long side of the sheet
+- Grain violations (parts that only fit cross-grain) are flagged with ⚠ on the layout
+
+#### Edge Cleanup
+
+- "Clean up factory edges" is on by default with a **1/4″ trim** on all four edges
+- Industry standard for cabinet-grade plywood; removes chipped or out-of-square factory edges and creates clean reference edges before any part cuts
+- Amount is user-editable (try 1/8″ for premium sheets, 1/2″ for rough construction-grade)
+- The SVG layout shows the trim zone as an amber border; cut sequences prepend four edge-cleanup cuts before the main rips
+
+#### Numbered Cut Sequences (table saw modes)
+
+Under each sheet layout in Strict and Relaxed modes, a "Cut Sequence" panel lists every cut in order:
+
+1. Edge cleanup rips and crosscuts (if enabled)
+2. Rip cuts — distance from top edge to each strip boundary
+3. Crosscuts per strip — distance from left edge to each part boundary
+4. Sub-rip crosscuts (Relaxed only)
+5. Waste callouts for any leftover at strip or sheet edges
+
+Rip positions are orange, crosscuts blue, sub-rips purple.
+
+#### General
+
+- **Automatic material grouping** — parts grouped by material and thickness (e.g., 3/4" and 1/4" plywood get separate sheet layouts)
+- **Configurable settings:** sheet size, saw kerf, grain lock, allow rotation, edge cleanup trim amount
 - **Color-coded SVG layouts** — each cabinet gets a distinct color, parts labeled with IDs and dimensions
-- **Per-sheet cut lists** — expandable table under each sheet showing every part
+- **Per-sheet cut lists** — expandable table under each sheet showing every part and any grain notes
 - **Print-friendly** — click Print for clean layouts without UI chrome
 - **Zero dependencies** — no server, no installs, just one HTML file
 
@@ -156,9 +189,11 @@ Each axis value (`x`, `y`, or `z`) tells the add-in which local axis corresponds
 | Add-in doesn't appear in Fusion 360 | Verify `.manifest` file was copied alongside `.py`. Restart Fusion 360. |
 | Installer says "AddIns folder not found" | Run Fusion 360 at least once before installing to create the folder. |
 | CSV has empty Material column | The optimizer auto-labels parts by thickness (e.g., "Plywood 3/4""). |
-| Parts show as "exceeds sheet size" | Check dimensions — part may be larger than your configured sheet size. |
+| Parts show as "exceeds sheet size" | Check dimensions — part may be larger than your configured sheet size. Also check if edge cleanup is on; effective sheet size is reduced by 2× the trim amount per axis. |
 | Orientation rules not loading | Verify `BodyPartsOrientation.csv` is next to the `.py` file in the AddIns folder. |
 | Identical parts have swapped dimensions | The thickness-lock feature (enabled by default) should prevent this. If it persists, check that you have the latest add-in version installed. |
+| Grain ⚠ warning on a part | The part couldn't fit grain-aligned anywhere on the sheet. Either the part is nearly square (rotation doesn't help much) or the effective sheet area is too small after trimming. Try reducing the trim amount or disabling grain lock for that run. |
+| Strict/Relaxed mode shows more sheets than Optimized | Expected — strip-based packing trades waste efficiency for cut simplicity. Relaxed usually closes the gap significantly. |
 
 ---
 
