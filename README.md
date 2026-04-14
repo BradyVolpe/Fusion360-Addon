@@ -8,6 +8,35 @@ Originally based on the [Old Guy Woodworks](https://oldguywoodworks.com) Cabinet
 
 ---
 
+## Screenshots
+
+### Upload &amp; Settings
+Drop your CSV, configure sheet size, kerf, grain direction, and factory-edge cleanup — then click **Optimize**.
+
+![Upload and settings panel](screenshots/01-settings.png)
+
+### Mode Comparison
+Every run produces three layouts side-by-side. The **Best** badge highlights the fewest-sheet / least-waste option.
+
+![Mode comparison cards](screenshots/02-mode-comparison.png)
+
+### Optimized Layout
+Recursive guillotine packing — minimum waste. Grain direction locked, amber trim zones visible on all edges.
+
+![Optimized layout](screenshots/03-optimized-layout.png)
+
+### Strict Table Saw
+Strip-based layout: every part in a strip shares the same width. Simple rip → crosscut sequence, numbered and color-coded.
+
+![Strict table saw layout](screenshots/04-strict-layout.png)
+
+### Relaxed Table Saw
+Sub-rips in strip tails reduce sheet count back to match Optimized, while keeping cuts predictable.
+
+![Relaxed table saw layout](screenshots/05-relaxed-layout.png)
+
+---
+
 ## Quick Start
 
 ### 1. Install the Fusion 360 Add-in
