@@ -226,6 +226,12 @@ Each axis value (`x`, `y`, or `z`) tells the add-in which local axis corresponds
 
 ---
 
+## License
+
+MIT — see [LICENSE](LICENSE). Free to use, modify, and redistribute with attribution.
+
+---
+
 ## Credits
 
 - Original Windows distribution: [Old Guy Woodworks](https://oldguywoodworks.com)
