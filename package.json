@@ -1,0 +1,7 @@
+{
+  "name": "fusion360-cut-list-optimizer",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -179,11 +179,16 @@ footer { text-align: center; padding: 2rem; color: var(--muted); font-size: .85r
         <span class="setting-hint">Typical: 0.125″ (1/8″)</span>
       </div>
       <div class="setting">
+        <label for="quantity">Quantity</label>
+        <input type="number" id="quantity" value="1" step="1" min="1" max="20" inputmode="numeric">
+        <span class="setting-hint">Number of complete cabinet sets</span>
+      </div>
+      <div class="setting">
         <div class="cb-setting">
           <input type="checkbox" id="respectGrain" checked>
           <label for="respectGrain" style="margin:0">Respect grain direction</label>
         </div>
-        <span class="setting-hint">Lock grain (Height) to sheet long side (96″)</span>
+        <span class="setting-hint">Optimized: lock Height to the long side. Table-saw modes always follow grain.</span>
       </div>
       <div class="setting">
         <div class="cb-setting">
@@ -211,7 +216,7 @@ footer { text-align: center; padding: 2rem; color: var(--muted); font-size: .85r
 
   <!-- Parts preview -->
   <div class="card" id="partsPreview" style="display:none">
-    <h3>Imported Parts <span id="partCount" style="font-weight:normal; color:var(--muted)"></span></h3>
+    <h3>Imported Parts <span id="partCount" role="status" aria-live="polite" aria-atomic="true" style="font-weight:normal; color:var(--muted)"></span></h3>
     <div id="partsTableWrap"></div>
   </div>
 </div>
@@ -296,6 +301,47 @@ function fractionStr(v) {
   return v.toFixed(3) + '"';
 }
 
+const MAX_QUANTITY = 20;
+
+function parseQuantity(value) {
+  const quantity = Number(value);
+  return Number.isInteger(quantity) && quantity >= 1 && quantity <= MAX_QUANTITY ? quantity : null;
+}
+
+function expandPartsForQuantity(parts, quantity) {
+  const expanded = [];
+  for (let copyNumber = 1; copyNumber <= quantity; copyNumber++) {
+    parts.forEach(part => {
+      expanded.push({ ...part, copyNumber });
+    });
+  }
+  return expanded;
+}
+
+function aggregateWarnings(importWarnings, resultsByMode) {
+  const counts = new Map();
+  const add = (scope, warning) => {
+    const message = `${scope}: ${warning}`;
+    counts.set(message, (counts.get(message) || 0) + 1);
+  };
+
+  importWarnings.forEach(warning => add('CSV', warning));
+  const labels = { optimized: 'Optimized', strict: 'Strict Table Saw', relaxed: 'Relaxed Table Saw' };
+  Object.entries(resultsByMode).forEach(([mode, result]) => {
+    result.warnings.forEach(warning => add(labels[mode] || mode, warning));
+  });
+
+  return [...counts.entries()].map(([message, count]) =>
+    count > 1 ? `${message} (${count} occurrences)` : message
+  );
+}
+
+function isBetterResult(candidate, current) {
+  if (candidate.grandParts !== current.grandParts) return candidate.grandParts > current.grandParts;
+  if (candidate.grandSheets !== current.grandSheets) return candidate.grandSheets < current.grandSheets;
+  return parseFloat(candidate.grandWaste) < parseFloat(current.grandWaste);
+}
+
 // ===== Guillotine Bin Packer =====
 function createPacker(sheetW, sheetH, kerf, respectGrain) {
   const freeRects = [{ x: 0, y: 0, w: sheetW, h: sheetH }];
@@ -325,7 +371,7 @@ function createPacker(sheetW, sheetH, kerf, respectGrain) {
   function tryPlace(part, allowRotation) {
     const pw = part.width + kerf, ph = part.height + kerf;
     const rw = part.height + kerf, rh = part.width + kerf;
-    let bestIdx = -1, bestScore = Infinity, bestRotated = false, bestEW = 0, bestEH = 0, grainViolation = false;
+    let bestIdx = -1, bestScore = Infinity, bestRotated = false, bestEW = 0, bestEH = 0;
 
     if (respectGrain) {
       // Grain-correct: part.height (grain dim) runs along sheet long side.
@@ -335,7 +381,8 @@ function createPacker(sheetW, sheetH, kerf, respectGrain) {
       const grainEH = grainHorizontal ? rh : ph;
       const grainRot = grainHorizontal;
 
-      // Pass 1: grain-correct orientation only
+      // Grain lock is a hard constraint. If this packer has no grain-correct
+      // space, return null so the solver can try another sheet or open a new one.
       for (let i = 0; i < freeRects.length; i++) {
         const rect = freeRects[i];
         if (grainEW <= rect.w + 0.001 && grainEH <= rect.h + 0.001) {
@@ -344,19 +391,6 @@ function createPacker(sheetW, sheetH, kerf, respectGrain) {
         }
       }
 
-      // Pass 2: fallback (grain violation) only if grain-correct didn't fit anywhere
-      if (bestIdx === -1) {
-        const flipEW = grainHorizontal ? pw : rw;
-        const flipEH = grainHorizontal ? ph : rh;
-        const flipRot = !grainRot;
-        for (let i = 0; i < freeRects.length; i++) {
-          const rect = freeRects[i];
-          if (flipEW <= rect.w + 0.001 && flipEH <= rect.h + 0.001) {
-            const s = score(rect, flipEW, flipEH);
-            if (s < bestScore) { bestScore = s; bestIdx = i; bestRotated = flipRot; bestEW = flipEW; bestEH = flipEH; grainViolation = true; }
-          }
-        }
-      }
     } else {
       // Original logic: try natural then rotated
       for (let i = 0; i < freeRects.length; i++) {
@@ -379,7 +413,7 @@ function createPacker(sheetW, sheetH, kerf, respectGrain) {
     freeRects.push(...newRects);
 
     const placement = {
-      part, x: rect.x, y: rect.y, rotated: bestRotated, grainViolation,
+      part, x: rect.x, y: rect.y, rotated: bestRotated,
       placedW: bestRotated ? part.height : part.width,
       placedH: bestRotated ? part.width : part.height,
     };
@@ -416,7 +450,10 @@ function solve(parts, sheetW, sheetH, kerf, allowRotation, respectGrain) {
       const rw = p.height + kerf, rh = p.width + kerf;
       const fitsN = pw <= sheetW + 0.001 && ph <= sheetH + 0.001;
       const fitsR = rw <= sheetW + 0.001 && rh <= sheetH + 0.001;
-      if (fitsN || fitsR) placeable.push(p);
+      const grainHorizontal = sheetW >= sheetH;
+      const fitsGrain = grainHorizontal ? fitsR : fitsN;
+      if (respectGrain ? fitsGrain : (fitsN || fitsR)) placeable.push(p);
+      else if (respectGrain) warnings.push(`"${p.partId}" (${p.width}" x ${p.height}") doesn't fit grain-correct on sheet`);
       else warnings.push(`"${p.partId}" (${p.width}" x ${p.height}") exceeds sheet size`);
     });
 
@@ -444,9 +481,6 @@ function solve(parts, sheetW, sheetH, kerf, allowRotation, respectGrain) {
     const sheetLayouts = sheets.map((packer, i) => {
       const usedArea = packer.placements.reduce((s, p) => s + p.placedW * p.placedH, 0);
       const totalArea = sheetW * sheetH;
-      packer.placements.forEach(pp => {
-        if (pp.grainViolation) warnings.push(`"${pp.part.partId}": grain reversed — couldn't fit grain-aligned on sheet ${i + 1}`);
-      });
       return {
         index: i + 1,
         placements: packer.placements,
@@ -478,11 +512,14 @@ function solve(parts, sheetW, sheetH, kerf, allowRotation, respectGrain) {
 }
 
 // ===== Strict 2-Stage (Table Saw) Solver =====
-// Groups parts by width into strips. Each strip runs along grain (sheetW, 96").
-// Every part in a strip shares the same strip width. Strips are packed into sheets via FFD on sheetH.
+// Groups parts by width into strips. Each strip runs along the sheet's long/grain axis.
+// Every part in a strip shares the same strip width. Strips are packed across the short axis via FFD.
 function solveStrict2Stage(parts, sheetW, sheetH, kerf) {
   const groups = {};
   const warnings = [];
+  const grainHorizontal = sheetW >= sheetH;
+  const grainLength = grainHorizontal ? sheetW : sheetH;
+  const crossWidth = grainHorizontal ? sheetH : sheetW;
   parts.forEach(p => {
     const key = `${p.material}|${round4(p.thickness)}`;
     if (!groups[key]) groups[key] = [];
@@ -498,7 +535,7 @@ function solveStrict2Stage(parts, sheetW, sheetH, kerf) {
 
     const placeable = [];
     groupParts.forEach(p => {
-      if (p.height + kerf <= sheetW + 0.001 && p.width + kerf <= sheetH + 0.001) {
+      if (p.height + kerf <= grainLength + 0.001 && p.width + kerf <= crossWidth + 0.001) {
         placeable.push(p);
       } else {
         warnings.push(`"${p.partId}" (${p.width}" x ${p.height}") doesn't fit grain-correct on sheet`);
@@ -523,7 +560,7 @@ function solveStrict2Stage(parts, sheetW, sheetH, kerf) {
         let placed = false;
         for (const strip of strips) {
           const gap = strip.parts.length > 0 ? kerf : 0;
-          if (strip.usedLength + gap + p.height <= sheetW + 0.001) {
+          if (strip.usedLength + gap + p.height <= grainLength + 0.001) {
             const offset = strip.usedLength + gap;
             strip.parts.push({ part: p, offsetAlongStrip: offset });
             strip.usedLength = offset + p.height;
@@ -541,14 +578,14 @@ function solveStrict2Stage(parts, sheetW, sheetH, kerf) {
       allStrips.push(...strips);
     });
 
-    // Pack strips into sheets (FFD on sheetH)
+    // Pack strips into sheets (FFD across the short axis)
     allStrips.sort((a, b) => b.width - a.width);
     const packedSheets = [];
     allStrips.forEach(strip => {
       let placed = false;
       for (const sheet of packedSheets) {
         const gap = sheet.strips.length > 0 ? kerf : 0;
-        if (sheet.usedHeight + gap + strip.width <= sheetH + 0.001) {
+        if (sheet.usedHeight + gap + strip.width <= crossWidth + 0.001) {
           const yOffset = sheet.usedHeight + gap;
           sheet.strips.push({ strip, yOffset });
           sheet.usedHeight = yOffset + strip.width;
@@ -566,16 +603,23 @@ function solveStrict2Stage(parts, sheetW, sheetH, kerf) {
       sheet.strips.forEach(({ strip, yOffset }) => {
         strip.parts.forEach(({ part, offsetAlongStrip }) => {
           placements.push({
-            part, x: offsetAlongStrip, y: yOffset,
-            rotated: true, grainViolation: false,
-            placedW: part.height, placedH: part.width,
+            part,
+            x: grainHorizontal ? offsetAlongStrip : yOffset,
+            y: grainHorizontal ? yOffset : offsetAlongStrip,
+            rotated: grainHorizontal,
+            placedW: grainHorizontal ? part.height : part.width,
+            placedH: grainHorizontal ? part.width : part.height,
           });
         });
         strip.subParts.forEach(({ part, xOff, yOff, placedW, placedH }) => {
           placements.push({
-            part, x: xOff, y: yOffset + yOff,
-            rotated: true, grainViolation: false,
-            placedW, placedH, subRipped: true,
+            part,
+            x: grainHorizontal ? xOff : yOffset + yOff,
+            y: grainHorizontal ? yOffset + yOff : xOff,
+            rotated: grainHorizontal,
+            placedW: grainHorizontal ? placedW : placedH,
+            placedH: grainHorizontal ? placedH : placedW,
+            subRipped: true,
           });
         });
       });
@@ -616,6 +660,9 @@ function solveStrict2Stage(parts, sheetW, sheetH, kerf) {
 function solveRelaxed2Stage(parts, sheetW, sheetH, kerf) {
   // Start with strict result, then post-process each material group
   const strict = solveStrict2Stage(parts, sheetW, sheetH, kerf);
+  const grainHorizontal = sheetW >= sheetH;
+  const grainLength = grainHorizontal ? sheetW : sheetH;
+  const crossWidth = grainHorizontal ? sheetH : sheetW;
 
   strict.results.forEach(mat => {
     // Collect all strips across sheets so we can migrate parts
@@ -624,7 +671,7 @@ function solveRelaxed2Stage(parts, sheetW, sheetH, kerf) {
 
     // For each strip, compute leftover tail (unused length after primary parts)
     // Try to move parts from strips with fewest parts into leftover tails of wider strips.
-    // Sub-rip model: within a strip of width stripW, leftover tail is (sheetW - usedLength - kerf) × stripW.
+    // Sub-rip model: within a strip of width stripW, leftover tail is (grainLength - usedLength - kerf) × stripW.
     // We can place a part there if part.height + kerf <= tailLen AND part.width + kerf <= stripW.
     // Within the tail, multiple parts may stack across-width (sub-rip cuts parallel to length).
 
@@ -652,7 +699,7 @@ function solveRelaxed2Stage(parts, sheetW, sheetH, kerf) {
           // Check if part fits past current subTailEnd
           const gap = donor.strip.subTailEnd > tailStart ? kerf : 0;
           const newEnd = donor.strip.subTailEnd + gap + part.height;
-          if (newEnd <= sheetW + 0.001 && part.width + kerf <= stripW + 0.001) {
+          if (newEnd <= grainLength + 0.001 && part.width + kerf <= stripW + 0.001) {
             donor.strip.subParts.push({
               part, xOff: donor.strip.subTailEnd + gap, yOff: 0,
               placedW: part.height, placedH: part.width,
@@ -662,14 +709,19 @@ function solveRelaxed2Stage(parts, sheetW, sheetH, kerf) {
             break;
           }
         }
-        if (!moved) remaining.push({ part, keep: true });
+        if (!moved) remaining.push(part);
       });
 
-      // If ALL parts moved, empty the candidate strip (so we can drop it)
-      if (remaining.length === 0) {
-        candidate.strip.parts = [];
-        candidate.strip.usedLength = 0;
-      }
+      // Rebuild the source strip with only the parts that were not moved.
+      // Keeping the old array here duplicates partially moved parts in the layout.
+      candidate.strip.parts = [];
+      candidate.strip.usedLength = 0;
+      remaining.forEach(part => {
+        const gap = candidate.strip.parts.length > 0 ? kerf : 0;
+        const offsetAlongStrip = candidate.strip.usedLength + gap;
+        candidate.strip.parts.push({ part, offsetAlongStrip });
+        candidate.strip.usedLength = offsetAlongStrip + part.height;
+      });
     });
 
     // Rebuild sheets — drop empty strips, re-pack into sheets
@@ -688,7 +740,7 @@ function solveRelaxed2Stage(parts, sheetW, sheetH, kerf) {
       let placed = false;
       for (const sheet of packedSheets) {
         const gap = sheet.strips.length > 0 ? kerf : 0;
-        if (sheet.usedHeight + gap + strip.width <= sheetH + 0.001) {
+        if (sheet.usedHeight + gap + strip.width <= crossWidth + 0.001) {
           const yOffset = sheet.usedHeight + gap;
           sheet.strips.push({ strip, yOffset });
           sheet.usedHeight = yOffset + strip.width;
@@ -706,16 +758,23 @@ function solveRelaxed2Stage(parts, sheetW, sheetH, kerf) {
       sheet.strips.forEach(({ strip, yOffset }) => {
         strip.parts.forEach(({ part, offsetAlongStrip }) => {
           placements.push({
-            part, x: offsetAlongStrip, y: yOffset,
-            rotated: true, grainViolation: false,
-            placedW: part.height, placedH: part.width,
+            part,
+            x: grainHorizontal ? offsetAlongStrip : yOffset,
+            y: grainHorizontal ? yOffset : offsetAlongStrip,
+            rotated: grainHorizontal,
+            placedW: grainHorizontal ? part.height : part.width,
+            placedH: grainHorizontal ? part.width : part.height,
           });
         });
         strip.subParts.forEach(({ part, xOff, yOff, placedW, placedH }) => {
           placements.push({
-            part, x: xOff, y: yOffset + yOff,
-            rotated: true, grainViolation: false,
-            placedW, placedH, subRipped: true,
+            part,
+            x: grainHorizontal ? xOff : yOffset + yOff,
+            y: grainHorizontal ? yOffset + yOff : xOff,
+            rotated: grainHorizontal,
+            placedW: grainHorizontal ? placedW : placedH,
+            placedH: grainHorizontal ? placedH : placedW,
+            subRipped: true,
           });
         });
       });
@@ -753,38 +812,43 @@ function generateCutSequence(sheetLayout, sheetW, sheetH, kerf, mode, trim) {
   const t = trim || 0;
   const effW = sheetW - 2 * t;
   const effH = sheetH - 2 * t;
+  const grainHorizontal = effW >= effH;
+  const grainLength = grainHorizontal ? effW : effH;
+  const crossWidth = grainHorizontal ? effH : effW;
+  const stripOrigin = grainHorizontal ? 'top' : 'left';
+  const crosscutOrigin = grainHorizontal ? 'left' : 'top';
 
   // Edge cleanup — performed first, before any part-placement cuts
   if (t > 0) {
-    steps.push({ kind: 'rip', label: `Edge cleanup: Rip ${t.toFixed(3)}" off top factory edge` });
-    steps.push({ kind: 'rip', label: `Edge cleanup: Rip ${t.toFixed(3)}" off bottom factory edge` });
-    steps.push({ kind: 'crosscut', label: `Edge cleanup: Crosscut ${t.toFixed(3)}" off left factory edge` });
-    steps.push({ kind: 'crosscut', label: `Edge cleanup: Crosscut ${t.toFixed(3)}" off right factory edge` });
+    const ripEdges = grainHorizontal ? ['top', 'bottom'] : ['left', 'right'];
+    const crosscutEdges = grainHorizontal ? ['left', 'right'] : ['top', 'bottom'];
+    ripEdges.forEach(edge => steps.push({ kind: 'rip', label: `Edge cleanup: Rip ${t.toFixed(3)}" off ${edge} factory edge` }));
+    crosscutEdges.forEach(edge => steps.push({ kind: 'crosscut', label: `Edge cleanup: Crosscut ${t.toFixed(3)}" off ${edge} factory edge` }));
   }
 
   // Sort strips top-to-bottom (by yOffset, in effective space)
   const sortedStrips = strips.slice().sort((a, b) => a.yOffset - b.yOffset);
 
-  // RIPS (parallel to grain) — position = distance from ORIGINAL top edge (include trim)
+  // RIPS (parallel to grain) — position includes the original factory-edge trim.
   sortedStrips.forEach((se, i) => {
     const cutPos = t + se.yOffset + se.strip.width;
     steps.push({
       kind: 'rip',
       pos: cutPos,
-      label: `Rip at ${cutPos.toFixed(3)}" from top → Strip ${i+1} (${se.strip.width.toFixed(3)}" wide × ${effW.toFixed(3)}" long)`,
+      label: `Rip at ${cutPos.toFixed(3)}" from ${stripOrigin} → Strip ${i+1} (${se.strip.width.toFixed(3)}" wide × ${grainLength.toFixed(3)}" long)`,
     });
   });
 
   const lastStrip = sortedStrips[sortedStrips.length - 1];
   const lastEdge = lastStrip.yOffset + lastStrip.strip.width;
-  if (lastEdge < effH - 0.01) {
+  if (lastEdge < crossWidth - 0.01) {
     steps.push({
       kind: 'waste',
-      label: `Remaining ${(effH - lastEdge).toFixed(3)}" before bottom trim is waste`,
+      label: `Remaining ${(crossWidth - lastEdge).toFixed(3)}" before ${grainHorizontal ? 'bottom' : 'right'} trim is waste`,
     });
   }
 
-  // CROSSCUTS per strip — positions measured from ORIGINAL left edge (include trim)
+  // CROSSCUTS per strip — positions include the original factory-edge trim.
   sortedStrips.forEach((se, i) => {
     const strip = se.strip;
     steps.push({
@@ -798,7 +862,7 @@ function generateCutSequence(sheetLayout, sheetW, sheetH, kerf, mode, trim) {
       steps.push({
         kind: 'crosscut',
         pos: endPos,
-        label: `Crosscut at ${endPos.toFixed(3)}" → ${pe.part.partId} (${pe.part.height.toFixed(3)}" × ${pe.part.width.toFixed(3)}")`,
+        label: `Crosscut at ${endPos.toFixed(3)}" from ${crosscutOrigin} → ${pe.part.partId} (${pe.part.height.toFixed(3)}" × ${pe.part.width.toFixed(3)}")`,
       });
     });
     // Sub-rips (relaxed mode only)
@@ -809,7 +873,7 @@ function generateCutSequence(sheetLayout, sheetW, sheetH, kerf, mode, trim) {
         steps.push({
           kind: 'subrip',
           pos: endPos,
-          label: `Sub-rip: Crosscut at ${endPos.toFixed(3)}", then rip to ${sp.placedH.toFixed(3)}" → ${sp.part.partId}`,
+          label: `Sub-rip: Crosscut at ${endPos.toFixed(3)}" from ${crosscutOrigin}, then rip to ${sp.placedH.toFixed(3)}" → ${sp.part.partId}`,
         });
       });
     }
@@ -817,10 +881,10 @@ function generateCutSequence(sheetLayout, sheetW, sheetH, kerf, mode, trim) {
     const tailStart = strip.usedLength;
     const subEnd = strip.subTailEnd || tailStart;
     const stripWasteStart = Math.max(tailStart, subEnd);
-    if (stripWasteStart < effW - 0.01) {
+    if (stripWasteStart < grainLength - 0.01) {
       steps.push({
         kind: 'waste',
-        label: `  Remaining ${(effW - stripWasteStart).toFixed(3)}" before right trim is waste`,
+        label: `  Remaining ${(grainLength - stripWasteStart).toFixed(3)}" before ${grainHorizontal ? 'right' : 'bottom'} trim is waste`,
       });
     }
   });
@@ -867,15 +931,22 @@ function esc(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 function renderSVG(layout, sheetW, sheetH, colorMap, respectGrain, trim) {
   const sw = sheetW * SCALE, sh = sheetH * SCALE, pad = 2;
   const trimPx = (trim || 0) * SCALE;
+  const grainHorizontal = sheetW >= sheetH;
   let parts = '';
 
   // Subtle grain lines drawn behind parts (within the usable area)
   let grainLines = '';
   if (respectGrain) {
+    const innerW = sw - 2 * trimPx;
     const innerH = sh - 2 * trimPx;
     for (let i = 1; i <= 5; i++) {
-      const gy = (trimPx + innerH * i / 6).toFixed(1);
-      grainLines += `<line x1="${trimPx.toFixed(1)}" y1="${gy}" x2="${(sw - trimPx).toFixed(1)}" y2="${gy}" stroke="#c4a265" stroke-width="0.7" opacity="0.2"/>`;
+      if (grainHorizontal) {
+        const gy = (trimPx + innerH * i / 6).toFixed(1);
+        grainLines += `<line x1="${trimPx.toFixed(1)}" y1="${gy}" x2="${(sw - trimPx).toFixed(1)}" y2="${gy}" stroke="#c4a265" stroke-width="0.7" opacity="0.2"/>`;
+      } else {
+        const gx = (trimPx + innerW * i / 6).toFixed(1);
+        grainLines += `<line x1="${gx}" y1="${trimPx.toFixed(1)}" x2="${gx}" y2="${(sh - trimPx).toFixed(1)}" stroke="#c4a265" stroke-width="0.7" opacity="0.2"/>`;
+      }
     }
   }
 
@@ -888,8 +959,7 @@ function renderSVG(layout, sheetW, sheetH, colorMap, respectGrain, trim) {
 
     const label = esc(pp.part.partId);
     let marker = '';
-    if (respectGrain) { if (pp.grainViolation) marker = ' ⚠'; }
-    else { if (pp.rotated) marker = ' (R)'; }
+    if (!respectGrain && pp.rotated) marker = ' (R)';
     const dim = `${pp.placedW.toFixed(2)}" x ${pp.placedH.toFixed(2)}"${marker}`;
 
     if (w > 50 && h > 30) {
@@ -903,7 +973,7 @@ function renderSVG(layout, sheetW, sheetH, colorMap, respectGrain, trim) {
     }
   });
 
-  const grainLabel = respectGrain ? ` \u2014 Grain \u2192` : '';
+  const grainLabel = respectGrain ? ` \u2014 Grain ${grainHorizontal ? '\u2192' : '\u2193'}` : '';
 
   // Trim-zone overlay: 4 solid amber border strips with dashed inner boundary
   let trimOverlay = '';
@@ -941,6 +1011,8 @@ document.getElementById('edgeCleanup').addEventListener('change', e => {
   document.getElementById('trimAmount').disabled = !e.target.checked;
 });
 
+document.getElementById('quantity').addEventListener('input', updatePartCount);
+
 fileInput.addEventListener('change', handleFile);
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
@@ -970,7 +1042,7 @@ function handleFile() {
     });
     html += '</tbody></table>';
     document.getElementById('partsTableWrap').innerHTML = html;
-    document.getElementById('partCount').textContent = `(${parts.length} parts)`;
+    updatePartCount();
     partsPreview.style.display = 'block';
     optimizeBtn.disabled = false;
     resultsDiv.style.display = 'none';
@@ -984,6 +1056,15 @@ optimizeBtn.addEventListener('click', runOptimize);
 let modeResults = {};
 let modeCtx = {};
 
+function updatePartCount() {
+  if (!loadedParts.length) return;
+  const quantity = parseQuantity(document.getElementById('quantity').value);
+  const suffix = quantity && quantity > 1
+    ? ` per set; ${loadedParts.length * quantity} to optimize across ${quantity} sets`
+    : '';
+  document.getElementById('partCount').textContent = `(${loadedParts.length} parts${suffix})`;
+}
+
 function runOptimize() {
   if (!loadedParts.length) return;
 
@@ -991,6 +1072,13 @@ function runOptimize() {
   const sheetH = parseFloat(document.getElementById('sheetH').value) || 48;
   const kerfVal = parseFloat(document.getElementById('kerf').value);
   const kerf = isNaN(kerfVal) ? 0.125 : kerfVal;
+  const quantityInput = document.getElementById('quantity');
+  const quantity = parseQuantity(quantityInput.value);
+  if (quantity === null) {
+    alert(`Quantity must be a whole number from 1 to ${MAX_QUANTITY}.`);
+    quantityInput.focus();
+    return;
+  }
   const allowRot = document.getElementById('allowRot').checked;
   const respectGrain = document.getElementById('respectGrain').checked;
   const edgeCleanup = document.getElementById('edgeCleanup').checked;
@@ -998,12 +1086,13 @@ function runOptimize() {
   const trim = edgeCleanup && !isNaN(trimVal) && trimVal > 0 ? trimVal : 0;
   const effW = sheetW - 2 * trim;
   const effH = sheetH - 2 * trim;
+  const partsToOptimize = expandPartsForQuantity(loadedParts, quantity);
 
   // Run all three solvers on effective (trimmed) sheet area
   modeResults = {
-    optimized: solve(loadedParts, effW, effH, kerf, allowRot, respectGrain),
-    strict: solveStrict2Stage(loadedParts, effW, effH, kerf),
-    relaxed: solveRelaxed2Stage(loadedParts, effW, effH, kerf),
+    optimized: solve(partsToOptimize, effW, effH, kerf, allowRot, respectGrain),
+    strict: solveStrict2Stage(partsToOptimize, effW, effH, kerf),
+    relaxed: solveRelaxed2Stage(partsToOptimize, effW, effH, kerf),
   };
   // Recompute waste against the FULL sheet area (trim counts as waste)
   if (trim > 0) {
@@ -1023,9 +1112,9 @@ function runOptimize() {
       data.grandWaste = gSheetArea > 0 ? ((gSheetArea - gUsedArea) / gSheetArea * 100).toFixed(1) : '0.0';
     });
   }
-  modeCtx = { sheetW, sheetH, effW, effH, kerf, respectGrain, trim };
+  modeCtx = { sheetW, sheetH, effW, effH, kerf, respectGrain, trim, quantity };
 
-  const allWarnings = [...loadedWarnings, ...modeResults.optimized.warnings];
+  const allWarnings = aggregateWarnings(loadedWarnings, modeResults);
 
   let html = '';
 
@@ -1042,13 +1131,12 @@ function runOptimize() {
     { key: 'relaxed', title: 'Relaxed Table Saw', sub: 'Rips + crosscuts + sub-rips' },
   ];
 
-  // Determine best (fewest sheets, then lowest waste)
+  // Prefer complete layouts, then fewest sheets, then lowest waste.
   let bestKey = 'optimized';
   modes.forEach(m => {
     const r = modeResults[m.key];
     const b = modeResults[bestKey];
-    if (r.grandSheets < b.grandSheets ||
-        (r.grandSheets === b.grandSheets && parseFloat(r.grandWaste) < parseFloat(b.grandWaste))) {
+    if (isBetterResult(r, b)) {
       bestKey = m.key;
     }
   });
@@ -1091,7 +1179,7 @@ function showMode(modeKey) {
 }
 
 function renderModeLayout(modeKey) {
-  const { sheetW, sheetH, kerf, respectGrain, trim } = modeCtx;
+  const { sheetW, sheetH, kerf, respectGrain, trim, quantity } = modeCtx;
   const data = modeResults[modeKey];
   const isTableSaw = modeKey === 'strict' || modeKey === 'relaxed';
   // Table saw modes always grain-correct; optimized respects user setting
@@ -1099,7 +1187,7 @@ function renderModeLayout(modeKey) {
 
   let html = '';
   html += `<div class="summary">
-    <div class="stat"><span class="stat-val">${data.grandParts}</span><span class="stat-lbl">Total Parts</span></div>
+    <div class="stat"><span class="stat-val">${data.grandParts}</span><span class="stat-lbl">Total Parts${quantity > 1 ? ` (${quantity} sets)` : ''}</span></div>
     <div class="stat"><span class="stat-val">${data.grandSheets}</span><span class="stat-lbl">Total Sheets</span></div>
     <div class="stat"><span class="stat-val">${data.grandWaste}%</span><span class="stat-lbl">Overall Waste</span></div>
     <div class="stat"><span class="stat-val">${data.materialCount}</span><span class="stat-lbl">Material Groups</span></div>
@@ -1132,13 +1220,12 @@ function renderModeLayout(modeKey) {
       html += `<div class="svg-wrap">${svg}</div>`;
 
       html += `<details><summary>Cut List (${sh.placements.length} parts)</summary>`;
-      html += '<table class="cl-table"><thead><tr><th>Part ID</th><th>Cabinet</th><th>Width</th><th>Height</th><th>Notes</th></tr></thead><tbody>';
+      html += `<table class="cl-table"><thead><tr><th>Part ID</th><th>Cabinet</th>${quantity > 1 ? '<th>Set</th>' : ''}<th>Width</th><th>Height</th><th>Notes</th></tr></thead><tbody>`;
       sh.placements.forEach(pp => {
         let note = '';
         if (pp.subRipped) note = 'Sub-rip';
-        else if (renderGrain) note = pp.grainViolation ? '⚠ Grain reversed' : '';
-        else note = pp.rotated ? 'Rotated' : '';
-        html += `<tr><td>${esc(pp.part.partId)}</td><td>${esc(pp.part.cabId)}</td><td>${pp.placedW.toFixed(3)}"</td><td>${pp.placedH.toFixed(3)}"</td><td>${note}</td></tr>`;
+        else if (!renderGrain) note = pp.rotated ? 'Rotated' : '';
+        html += `<tr><td>${esc(pp.part.partId)}</td><td>${esc(pp.part.cabId)}</td>${quantity > 1 ? `<td>${pp.part.copyNumber}</td>` : ''}<td>${pp.placedW.toFixed(3)}"</td><td>${pp.placedH.toFixed(3)}"</td><td>${note}</td></tr>`;
       });
       html += '</tbody></table></details>';
 

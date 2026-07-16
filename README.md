@@ -72,7 +72,7 @@ Then in Fusion 360:
 
 Then:
 1. Drag & drop the exported CSV onto the upload area
-2. Adjust settings if needed (sheet size, kerf, grain direction, edge cleanup)
+2. Adjust settings if needed (quantity, sheet size, kerf, grain direction, edge cleanup)
 3. Click **Optimize Cut List**
 4. Compare layouts across three cut patterns and print the one that fits your workflow
 
@@ -140,7 +140,9 @@ Every run produces three layouts simultaneously. A comparison card shows sheets 
 
 - The **Height** column from the Fusion 360 add-in maps to the grain (long-axis) direction of each panel
 - "Respect grain direction" (on by default) locks the grain dim to the 96″ long side of the sheet
-- Grain violations (parts that only fit cross-grain) are flagged with ⚠ on the layout
+- Grain lock is a hard constraint: the optimizer opens another sheet rather than rotating a part cross-grain
+- Parts that cannot fit grain-correct on an empty sheet are excluded and reported as warnings
+- Strict and Relaxed table-saw modes always follow grain because their rip-first cut sequences depend on it
 
 #### Edge Cleanup
 
@@ -163,6 +165,7 @@ Rip positions are orange, crosscuts blue, sub-rips purple.
 
 #### General
 
+- **Whole-project quantity** — optimize 1–20 complete copies of the imported cabinet set in one combined layout
 - **Automatic material grouping** — parts grouped by material and thickness (e.g., 3/4" and 1/4" plywood get separate sheet layouts)
 - **Configurable settings:** sheet size, saw kerf, grain lock, allow rotation, edge cleanup trim amount
 - **Color-coded SVG layouts** — each cabinet gets a distinct color, parts labeled with IDs and dimensions
@@ -221,7 +224,7 @@ Each axis value (`x`, `y`, or `z`) tells the add-in which local axis corresponds
 | Parts show as "exceeds sheet size" | Check dimensions — part may be larger than your configured sheet size. Also check if edge cleanup is on; effective sheet size is reduced by 2× the trim amount per axis. |
 | Orientation rules not loading | Verify `BodyPartsOrientation.csv` is next to the `.py` file in the AddIns folder. |
 | Identical parts have swapped dimensions | The thickness-lock feature (enabled by default) should prevent this. If it persists, check that you have the latest add-in version installed. |
-| Grain ⚠ warning on a part | The part couldn't fit grain-aligned anywhere on the sheet. Either the part is nearly square (rotation doesn't help much) or the effective sheet area is too small after trimming. Try reducing the trim amount or disabling grain lock for that run. |
+| Grain-fit warning for a part | The part cannot fit with its Height dimension along the sheet's long side. Try a larger sheet, reduce the trim amount, or disable grain lock for that run. |
 | Strict/Relaxed mode shows more sheets than Optimized | Expected — strip-based packing trades waste efficiency for cut simplicity. Relaxed usually closes the gap significantly. |
 
 ---
