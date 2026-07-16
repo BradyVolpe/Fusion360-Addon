@@ -11,18 +11,21 @@ const html = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
 const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
 
 assert.ok(scriptMatch, 'index.html must contain an inline script');
+assert.doesNotThrow(() => new vm.Script(scriptMatch[1]), 'the complete browser script must parse');
 
 const pureScript = scriptMatch[1].split('// ===== UI =====')[0];
 const context = {};
 vm.createContext(context);
 vm.runInContext(
-  `${pureScript}\nthis.optimizerApi = { parseCSV, parseQuantity, expandPartsForQuantity, aggregateWarnings, isBetterResult, solve, solveStrict2Stage, solveRelaxed2Stage, generateCutSequence };`,
+  `${pureScript}\nthis.optimizerApi = { parseCSV, parseQuantity, parsePercentage, expandPartsForQuantity, buildHardwoodBlanks, calculateHardwoodOrder, solveHardwood, planHardwoodMaterials, collapseWarnings, aggregateWarnings, isBetterResult, solve, solveStrict2Stage, solveRelaxed2Stage, generateCutSequence };`,
   context,
 );
 
 const api = context.optimizerApi;
 const fixture = fs.readFileSync(path.join(testDir, 'fixtures', 'CabinetParams.csv'), 'utf8');
 const parsed = api.parseCSV(fixture);
+const hardwoodFixture = fs.readFileSync(path.join(testDir, 'fixtures', 'FaceFrameHardwood.csv'), 'utf8');
+const hardwoodParsed = api.parseCSV(hardwoodFixture);
 const effectiveSheet = { width: 95.5, height: 47.5, kerf: 0.125 };
 
 function solveFixture(quantity, respectGrain = true) {
@@ -52,6 +55,15 @@ test('quantity accepts only whole cabinet-set counts from 1 through 20', () => {
   assert.equal(api.parseQuantity('20'), 20);
   for (const value of ['0', '-1', '1.5', '21', '', 'not-a-number']) {
     assert.equal(api.parseQuantity(value), null, `expected ${JSON.stringify(value)} to be rejected`);
+  }
+});
+
+test('order allowance accepts only percentages from 0 through 100', () => {
+  assert.equal(api.parsePercentage('0'), 0);
+  assert.equal(api.parsePercentage('20'), 20);
+  assert.equal(api.parsePercentage('100'), 100);
+  for (const value of ['-1', '100.1', '150', '', 'not-a-number']) {
+    assert.equal(api.parsePercentage(value), null, `expected ${JSON.stringify(value)} to be rejected`);
   }
 });
 
@@ -163,4 +175,94 @@ test('warnings from every solver are surfaced and repeated quantity warnings are
   assert.ok(warnings.includes('CSV: bad row'));
   assert.ok(warnings.includes('Optimized: oversized (2 occurrences)'));
   assert.ok(warnings.includes('Strict Table Saw: grain mismatch'));
+});
+
+test('hardwood fixture models 1-1/2 inch parts as two 4/4 glue-up laminations', () => {
+  assert.equal(hardwoodParsed.parts.length, 8);
+  assert.equal(hardwoodParsed.warnings.length, 0);
+
+  const build = api.buildHardwoodBlanks(hardwoodParsed.parts, 1, 0.75, 0.25, 1);
+  assert.equal(build.warnings.length, 0);
+  assert.equal(build.blanks.length, 12);
+  assert.equal(build.blanks.filter(blank => blank.finishedThickness === 1.5).length, 8);
+  assert.ok(build.blanks.filter(blank => blank.finishedThickness === 1.5).every(blank => blank.layerCount === 2));
+  assert.ok(build.blanks.filter(blank => blank.finishedThickness === 0.75).every(blank => blank.layerCount === 1));
+  assert.equal(build.laminationGroups.find(group => group.finishedThickness === 1.5).thicknessMargin, 0);
+});
+
+test('hardwood quantity doubles finished parts, laminations, and order requirement', () => {
+  const one = api.buildHardwoodBlanks(hardwoodParsed.parts, 1, 0.75, 0.25, 1);
+  const two = api.buildHardwoodBlanks(hardwoodParsed.parts, 2, 0.75, 0.25, 1);
+  const oneOrder = api.calculateHardwoodOrder(one.blanks, 1, 6, 20);
+  const twoOrder = api.calculateHardwoodOrder(two.blanks, 1, 6, 20);
+
+  assert.equal(two.blanks.length, one.blanks.length * 2);
+  assert.equal(twoOrder.netBoardFeet, oneOrder.netBoardFeet * 2);
+  assert.equal(twoOrder.netLinearFeet, oneOrder.netLinearFeet * 2);
+});
+
+test('hardwood order reports board feet and width-dependent linear feet with allowance', () => {
+  const build = api.buildHardwoodBlanks(hardwoodParsed.parts, 1, 0.75, 0.25, 1);
+  const order = api.calculateHardwoodOrder(build.blanks, 1, 6, 20);
+
+  assert.equal(order.netBoardFeet.toFixed(3), '7.378');
+  assert.equal(order.netLinearFeet.toFixed(3), '14.757');
+  assert.equal(order.orderBoardFeet, 9);
+  assert.equal(order.orderLinearFeet, 18);
+});
+
+test('hardwood order never recommends less stock than its selected cut map consumes', () => {
+  const build = api.buildHardwoodBlanks(hardwoodParsed.parts, 1, 0.75, 0.25, 1);
+  const layout = api.solveHardwood(build.blanks, 6, 120, 0.125, 1);
+  const layoutBoardFeet = layout.boards.length * 6 * 120 * 1 / 144;
+  const order = api.calculateHardwoodOrder(build.blanks, 1, 6, 20, layoutBoardFeet);
+
+  assert.equal(layout.boards.length, 2);
+  assert.equal(layoutBoardFeet, 10);
+  assert.equal(order.orderBoardFeet, 10);
+  assert.equal(order.orderLinearFeet, 20);
+});
+
+test('hardwood solver keeps Height along board length and places every glue-up layer', () => {
+  const build = api.buildHardwoodBlanks(hardwoodParsed.parts, 1, 0.75, 0.25, 1);
+  const result = api.solveHardwood(build.blanks, 6, 120, 0.125, 1);
+  const placed = result.boards.flatMap(board => board.placements);
+
+  assert.equal(result.warnings.length, 0);
+  assert.equal(result.placedCount, 12);
+  assert.equal(placed.length, 12);
+  assert.ok(placed.every(placement => placement.rotated));
+  assert.ok(placed.every(placement => placement.placedW === placement.part.height));
+  assert.ok(placed.every(placement => placement.placedH === placement.part.width));
+});
+
+test('hardwood solver rejects a blank that only fits by rotating across grain', () => {
+  const blank = {
+    partId: 'cross-grain trap', cabId: 'Test', width: 5, height: 50,
+    finishedThickness: 0.75, stockThickness: 0.75, layerNumber: 1, layerCount: 1,
+  };
+  const result = api.solveHardwood([blank], 60, 6, 0, 0);
+
+  assert.equal(result.placedCount, 0);
+  assert.equal(result.boards.length, 0);
+  assert.match(result.warnings[0], /does not fit grain-correct/);
+});
+
+test('hardwood plans keep different species in separate orders and boards', () => {
+  const parts = [
+    { partId: 'maple rail', cabId: 'A', width: 2, height: 30, thickness: 0.75, material: 'Maple', materialProvided: true },
+    { partId: 'cherry rail', cabId: 'B', width: 2, height: 30, thickness: 0.75, material: 'Cherry', materialProvided: true },
+  ];
+  const build = api.buildHardwoodBlanks(parts, 1, 0.75, 0, 0);
+  const plans = api.planHardwoodMaterials(build.blanks, 1, 6, 20, 6, 96, 0.125, 1);
+
+  assert.deepEqual(Array.from(plans, plan => plan.material), ['Cherry', 'Maple']);
+  assert.equal(plans.length, 2);
+  assert.ok(plans.every(plan => plan.layout.boards.length === 1));
+  assert.ok(plans.every(plan => plan.layout.boards.every(board => board.placements.every(placement => placement.part.hardwoodMaterial === plan.material))));
+});
+
+test('hardwood warning aggregation collapses repeated quantity failures', () => {
+  const warnings = api.collapseWarnings(['too wide', 'too wide', 'too long']);
+  assert.deepEqual(Array.from(warnings), ['too wide (2 occurrences)', 'too long']);
 });

@@ -1,0 +1,9 @@
+﻿Part_ID,Cabinet_ID,Width,Height,Depth,Units,Material
+left_stile,FaceFrame,2.25,29.5,1.5,in,
+left_middle_stile,FaceFrame,2.25,25.0,0.75,in,
+right_middle_stile,FaceFrame,2.25,25.0,0.75,in,
+right_stile,FaceFrame,2.25,29.5,1.5,in,
+Bottom_rail,FaceFrame,2.25,63.5,0.75,in,
+top_rail,FaceFrame,2.25,63.5,0.75,in,
+rear stile,FaceFrame,2.25,29.5,1.5,in,
+rear stile (1),FaceFrame,2.25,29.5,1.5,in,

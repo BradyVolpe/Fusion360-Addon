@@ -1,6 +1,6 @@
 # Fusion 360 Cabinet Optimizer — Mac Edition
 
-A macOS-compatible toolset for optimizing cabinet sheet goods cuts from Fusion 360 designs. Includes a Fusion 360 add-in to export cabinet part dimensions and a standalone browser-based cut list optimizer.
+A macOS-compatible toolset for planning cabinet sheet-goods cuts and dimensional-hardwood orders from Fusion 360 designs. Includes a Fusion 360 add-in to export cabinet part dimensions and a standalone browser-based optimizer.
 
 **[Try the Cut List Optimizer online](https://bradyvolpe.github.io/Fusion360-Addon/)** — no install needed, runs in your browser.
 
@@ -72,9 +72,10 @@ Then in Fusion 360:
 
 Then:
 1. Drag & drop the exported CSV onto the upload area
-2. Adjust settings if needed (quantity, sheet size, kerf, grain direction, edge cleanup)
-3. Click **Optimize Cut List**
-4. Compare layouts across three cut patterns and print the one that fits your workflow
+2. Choose **Sheet Goods** or **Linear Foot (Hardwood)**
+3. Adjust the workflow settings and quantity
+4. Click **Optimize Cut List** or **Plan Hardwood Cuts**
+5. Review the order quantity and printable cutting layout
 
 ---
 
@@ -107,7 +108,7 @@ CSV File: Part_ID, Cabinet_ID, Width, Height, Depth, Units, Material
 Cut List Optimizer (browser-based, online or local)
         |
         v
-Optimized cut layouts with visual sheet maps (printable)
+Purchase estimate and optimized cut layouts (printable)
 ```
 
 ### CSV Format
@@ -162,6 +163,20 @@ Under each sheet layout in Strict and Relaxed modes, a "Cut Sequence" panel list
 5. Waste callouts for any leftover at strip or sheet edges
 
 Rip positions are orange, crosscuts blue, sub-rips purple.
+
+#### Dimensional Hardwood
+
+Choose **Linear Foot (Hardwood)** for face frames and other solid-wood parts:
+
+- Select 4/4, 5/4, or 8/4 stock. Lamination count uses dressed thickness (3/4", 1", or 1-3/4"), while board-foot ordering uses nominal thickness (1", 1-1/4", or 2").
+- The order ticket reports recommended board feet and equivalent linear feet at a selectable average delivered width. Board feet remains the reliable quantity when the lumber yard supplies mixed widths.
+- Finished parts thicker than the usable stock become explicit glue-up layers. A 1-1/2" part cut from 4/4 stock creates two full-size blanks.
+- The lamination schedule flags an exact-thickness buildup, such as 2 × 3/4" = 1-1/2", because it leaves no thickness for flattening after glue-up. Use thicker/rougher stock when the final dimension must survive post-glue surfacing.
+- Configurable rough width/length overage preserves material for jointing, trimming, and final milling.
+- Choose a received board width from 4–8" and length from 8–12 ft to produce a board-by-board cutting map. Rerun the map for each stock size in a mixed delivery.
+- Grain is a hard constraint: CSV `Height` always runs along board length. Hardwood blanks are never rotated cross-grain to improve fit.
+- Named CSV materials/species receive separate order quantities and board layouts. Empty Material values are grouped as `Hardwood`.
+- The purchasing allowance is reserved for defects, color selection, and milling; it is not artificially filled with cut-map parts.
 
 #### General
 
@@ -226,6 +241,9 @@ Each axis value (`x`, `y`, or `z`) tells the add-in which local axis corresponds
 | Identical parts have swapped dimensions | The thickness-lock feature (enabled by default) should prevent this. If it persists, check that you have the latest add-in version installed. |
 | Grain-fit warning for a part | The part cannot fit with its Height dimension along the sheet's long side. Try a larger sheet, reduce the trim amount, or disable grain lock for that run. |
 | Strict/Relaxed mode shows more sheets than Optimized | Expected — strip-based packing trades waste efficiency for cut simplicity. Relaxed usually closes the gap significantly. |
+| Hardwood linear feet changes with average width | Expected. Linear feet is width-dependent; use board feet as the invariant order quantity when the delivered boards are mixed widths. |
+| A 1-1/2" hardwood part shows multiple blanks | The part requires a glue-up. With 4/4 stock dressed to 3/4", the planner creates two grain-aligned laminations. |
+| Hardwood blank does not fit grain-correct | Increase the selected board length/width or reduce rough overage. The hardwood workflow never rotates Height across the grain. |
 
 ---
 
