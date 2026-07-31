@@ -17,7 +17,7 @@ const pureScript = scriptMatch[1].split('// ===== UI =====')[0];
 const context = {};
 vm.createContext(context);
 vm.runInContext(
-  `${pureScript}\nthis.optimizerApi = { parseCSV, parseQuantity, parsePercentage, expandPartsForQuantity, buildHardwoodBlanks, calculateHardwoodOrder, solveHardwood, planHardwoodMaterials, collapseWarnings, aggregateWarnings, isBetterResult, solve, solveStrict2Stage, solveRelaxed2Stage, generateCutSequence };`,
+  `${pureScript}\nthis.optimizerApi = { parseCSV, parseQuantity, parsePercentage, expandPartsForQuantity, buildHardwoodBlanks, calculateHardwoodOrder, solveHardwood, planHardwoodMaterials, recommendHardwoodStock, collapseWarnings, aggregateWarnings, isBetterResult, solve, solveStrict2Stage, solveRelaxed2Stage, generateCutSequence };`,
   context,
 );
 
@@ -26,6 +26,8 @@ const fixture = fs.readFileSync(path.join(testDir, 'fixtures', 'CabinetParams.cs
 const parsed = api.parseCSV(fixture);
 const hardwoodFixture = fs.readFileSync(path.join(testDir, 'fixtures', 'FaceFrameHardwood.csv'), 'utf8');
 const hardwoodParsed = api.parseCSV(hardwoodFixture);
+const dimensionalLumberFixture = fs.readFileSync(path.join(testDir, 'fixtures', 'DimensionalLumber.csv'), 'utf8');
+const dimensionalLumberParsed = api.parseCSV(dimensionalLumberFixture);
 const effectiveSheet = { width: 95.5, height: 47.5, kerf: 0.125 };
 
 function solveFixture(quantity, respectGrain = true) {
@@ -265,4 +267,101 @@ test('hardwood plans keep different species in separate orders and boards', () =
 test('hardwood warning aggregation collapses repeated quantity failures', () => {
   const warnings = api.collapseWarnings(['too wide', 'too wide', 'too long']);
   assert.deepEqual(Array.from(warnings), ['too wide (2 occurrences)', 'too long']);
+});
+
+test('supplied dimensional-lumber CSV reproduces the missing drawer-face failure on single 6-inch boards', () => {
+  assert.equal(dimensionalLumberParsed.parts.length, 17);
+  assert.equal(dimensionalLumberParsed.warnings.length, 0);
+
+  const build = api.buildHardwoodBlanks(dimensionalLumberParsed.parts, 2, 1, 0.25, 1, {
+    boardWidth: 6,
+    kerf: 0.125,
+    widePartStrategy: 'single',
+  });
+  const layout = api.solveHardwood(build.blanks, 6, 108, 0.125, 1);
+
+  assert.equal(build.blanks.length, 42);
+  assert.equal(layout.placedCount, 24);
+  assert.equal(layout.warnings.length, 18);
+  assert.ok(layout.warnings.every(warning => /drawer face/.test(warning)));
+});
+
+test('edge-glue strategy maps every drawer face as equal full-length grain-aligned strips', () => {
+  const build = api.buildHardwoodBlanks(dimensionalLumberParsed.parts, 2, 1, 0.25, 1, {
+    boardWidth: 6,
+    kerf: 0.125,
+    widePartStrategy: 'glue',
+  });
+  const layout = api.solveHardwood(build.blanks, 6, 108, 0.125, 1);
+  const placements = layout.boards.flatMap(board => board.placements);
+  const drawerStrips = build.blanks.filter(blank => /drawer face/.test(blank.partId));
+
+  assert.equal(build.blanks.length, 60);
+  assert.equal(build.widthGlueGroups.length, 4);
+  assert.equal(layout.placedCount, 60);
+  assert.equal(layout.warnings.length, 0);
+  assert.ok(drawerStrips.every(blank => blank.widthPanelCount === 2));
+  assert.deepEqual(Array.from(new Set(drawerStrips.map(blank => blank.width))).sort(), [3.375, 4.625]);
+  assert.ok(placements.every(placement => placement.rotated));
+  assert.ok(placements.every(placement => placement.placedW === placement.part.height));
+  assert.ok(placements.every(placement => placement.placedH === placement.part.width));
+});
+
+test('a part that is both thick and wide multiplies thickness layers by width strips', () => {
+  const parts = [{
+    partId: 'thick wide panel', cabId: 'Test', width: 9, height: 30,
+    thickness: 1.5, material: 'Hardwood', materialProvided: true,
+  }];
+  const build = api.buildHardwoodBlanks(parts, 1, 1, 0.25, 1, {
+    boardWidth: 6,
+    kerf: 0.125,
+    widePartStrategy: 'glue',
+  });
+  const layout = api.solveHardwood(build.blanks, 6, 96, 0.125, 1);
+
+  assert.equal(build.blanks.length, 4);
+  assert.deepEqual(Array.from(build.blanks, blank => [blank.layerNumber, blank.widthPanelNumber]), [[1, 1], [1, 2], [2, 1], [2, 2]]);
+  assert.equal(build.widthGlueGroups[0].layerCount, 2);
+  assert.equal(build.widthGlueGroups[0].stripBlankCount, 4);
+  assert.equal(layout.placedCount, 4);
+  assert.equal(layout.warnings.length, 0);
+});
+
+test('hardwood shopping recommendation is complete and includes whole boards for allowance', () => {
+  const config = {
+    stockThickness: 1,
+    nominalStockThickness: 1.25,
+    averageBoardWidth: 8,
+    wastePct: 20,
+    widthOverage: 0.25,
+    lengthOverage: 1,
+    endTrim: 1,
+    widePartStrategy: 'glue',
+  };
+  const recommendation = api.recommendHardwoodStock(dimensionalLumberParsed.parts, 2, config, 0.125);
+
+  assert.ok(recommendation);
+  assert.equal(recommendation.boardWidth, 8);
+  assert.equal(recommendation.boardLength, 120);
+  assert.equal(recommendation.boardCount, 8);
+  assert.equal(recommendation.purchasedBoardFeet.toFixed(1), '66.7');
+  assert.equal(recommendation.materials.length, 1);
+  assert.equal(recommendation.materials[0].material, 'Hardwood');
+  assert.ok(recommendation.materials[0].boardCount >= recommendation.materials[0].mappedBoardCount);
+  assert.equal(recommendation.boardCount, recommendation.materials[0].boardCount);
+});
+
+test('single-board strategy reports no stocked recommendation when a rough part exceeds 8 inches', () => {
+  const recommendation = api.recommendHardwoodStock(dimensionalLumberParsed.parts, 1, {
+    stockThickness: 1,
+    nominalStockThickness: 1.25,
+    averageBoardWidth: 8,
+    wastePct: 20,
+    widthOverage: 0.25,
+    lengthOverage: 1,
+    endTrim: 1,
+    widePartStrategy: 'single',
+  }, 0.125);
+
+  assert.equal(recommendation, null);
 });

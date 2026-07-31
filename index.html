@@ -245,7 +245,7 @@ footer { text-align: center; padding: 2rem; color: var(--muted); font-size: .85r
     </div>
 
     <div class="workflow-panel" id="hardwoodSettings" hidden>
-      <div class="hardwood-note"><strong>Grain is locked.</strong> CSV Height always runs along the board length. Finished parts thicker than the selected dressed stock become glue-up laminations.</div>
+      <div class="hardwood-note"><strong>Grain is locked.</strong> CSV Height always runs along the board length. Thick parts become laminations; wide parts can become equal-width, edge-glued strips.</div>
       <div class="settings">
         <div class="setting">
           <label for="hardwoodThickness">Stock thickness</label>
@@ -284,6 +284,14 @@ footer { text-align: center; padding: 2rem; color: var(--muted); font-size: .85r
             <option value="4">4″</option><option value="5">5″</option><option value="6" selected>6″</option><option value="7">7″</option><option value="8">8″</option>
           </select>
           <span class="setting-hint">Rerun for the widths you receive</span>
+        </div>
+        <div class="setting">
+          <label for="widePartStrategy">Wide-part strategy</label>
+          <select id="widePartStrategy">
+            <option value="glue" selected>Edge-glue equal strips</option>
+            <option value="single">Require one wide board</option>
+          </select>
+          <span class="setting-hint">Keeps every strip’s grain along part Height</span>
         </div>
         <div class="setting">
           <label for="layoutBoardLength">Layout board length</label>
@@ -418,11 +426,16 @@ function expandPartsForQuantity(parts, quantity) {
   return expanded;
 }
 
-function buildHardwoodBlanks(parts, quantity, stockThickness, widthOverage, lengthOverage) {
+function buildHardwoodBlanks(parts, quantity, stockThickness, widthOverage, lengthOverage, options = {}) {
   const blanks = [];
   const warnings = [];
   const laminationGroups = new Map();
+  const widthGlueGroups = new Map();
   const expanded = expandPartsForQuantity(parts, quantity);
+  const boardWidth = Number.isFinite(options.boardWidth) ? options.boardWidth : Infinity;
+  const kerf = Number.isFinite(options.kerf) ? Math.max(0, options.kerf) : 0;
+  const allowWidthGlueUps = options.widePartStrategy === 'glue';
+  const maxStripWidth = boardWidth - kerf;
 
   expanded.forEach(part => {
     if (!(part.thickness > 0)) {
@@ -432,6 +445,13 @@ function buildHardwoodBlanks(parts, quantity, stockThickness, widthOverage, leng
 
     const layerCount = Math.ceil((part.thickness / stockThickness) - 1e-9);
     const hardwoodMaterial = part.materialProvided ? part.material : 'Hardwood';
+    const roughWidth = round4(part.width + widthOverage);
+    const roughLength = round4(part.height + lengthOverage);
+    const needsWidthGlueUp = roughWidth + kerf > boardWidth + 0.001;
+    const widthPanelCount = allowWidthGlueUps && needsWidthGlueUp && maxStripWidth > 0
+      ? Math.ceil(roughWidth / maxStripWidth)
+      : 1;
+    const stripWidth = round4(roughWidth / widthPanelCount);
     const groupKey = `${hardwoodMaterial}|${round4(part.thickness)}`;
     const current = laminationGroups.get(groupKey) || {
       material: hardwoodMaterial,
@@ -443,23 +463,55 @@ function buildHardwoodBlanks(parts, quantity, stockThickness, widthOverage, leng
       layerCount,
     };
     current.partCount++;
-    current.blankCount += layerCount;
+    current.blankCount += layerCount * widthPanelCount;
     laminationGroups.set(groupKey, current);
 
-    for (let layerNumber = 1; layerNumber <= layerCount; layerNumber++) {
-      blanks.push({
-        ...part,
-        hardwoodMaterial,
-        width: round4(part.width + widthOverage),
-        height: round4(part.height + lengthOverage),
+    if (widthPanelCount > 1) {
+      const widthKey = `${hardwoodMaterial}|${part.partId}|${round4(part.width)}|${round4(part.height)}|${round4(part.thickness)}|${widthPanelCount}`;
+      const widthGroup = widthGlueGroups.get(widthKey) || {
+        material: hardwoodMaterial,
+        partId: part.partId,
+        finishedWidth: part.width,
+        finishedLength: part.height,
         finishedThickness: part.thickness,
-        layerNumber,
+        roughWidth,
+        roughLength,
+        widthPanelCount,
         layerCount,
-      });
+        stripWidth,
+        partCount: 0,
+        stripBlankCount: 0,
+      };
+      widthGroup.partCount++;
+      widthGroup.stripBlankCount += layerCount * widthPanelCount;
+      widthGlueGroups.set(widthKey, widthGroup);
+    }
+
+    for (let layerNumber = 1; layerNumber <= layerCount; layerNumber++) {
+      for (let widthPanelNumber = 1; widthPanelNumber <= widthPanelCount; widthPanelNumber++) {
+        blanks.push({
+          ...part,
+          hardwoodMaterial,
+          width: stripWidth,
+          height: roughLength,
+          finishedWidth: part.width,
+          roughAssemblyWidth: roughWidth,
+          finishedThickness: part.thickness,
+          layerNumber,
+          layerCount,
+          widthPanelNumber,
+          widthPanelCount,
+        });
+      }
     }
   });
 
-  return { blanks, warnings, laminationGroups: [...laminationGroups.values()].sort((a, b) => a.material.localeCompare(b.material) || a.finishedThickness - b.finishedThickness) };
+  return {
+    blanks,
+    warnings,
+    laminationGroups: [...laminationGroups.values()].sort((a, b) => a.material.localeCompare(b.material) || a.finishedThickness - b.finishedThickness),
+    widthGlueGroups: [...widthGlueGroups.values()].sort((a, b) => a.material.localeCompare(b.material) || a.finishedWidth - b.finishedWidth || a.finishedLength - b.finishedLength),
+  };
 }
 
 function calculateHardwoodOrder(blanks, nominalStockThickness, averageBoardWidth, wastePct, layoutBoardFeet = 0) {
@@ -497,7 +549,9 @@ function solveHardwood(blanks, boardWidth, boardLength, kerf, endTrim) {
     if (blank.width + kerf <= boardWidth + 0.001 && blank.height + kerf <= usableLength + 0.001) {
       placeable.push(blank);
     } else {
-      warnings.push(`"${blank.partId}" layer ${blank.layerNumber}/${blank.layerCount} (${blank.width}" wide x ${blank.height}" long) does not fit grain-correct on a ${boardWidth}" x ${boardLength}" board`);
+      const widthPanel = blank.widthPanelCount > 1 ? `, width strip ${blank.widthPanelNumber}/${blank.widthPanelCount}` : '';
+      const widthHelp = blank.width + kerf > boardWidth + 0.001 ? '; select wider stock or enable edge-glue strips' : '';
+      warnings.push(`"${blank.partId}" layer ${blank.layerNumber}/${blank.layerCount}${widthPanel} (${blank.width}" wide x ${blank.height}" long) does not fit grain-correct on a ${boardWidth}" x ${boardLength}" board${widthHelp}`);
     }
   });
 
@@ -552,6 +606,53 @@ function planHardwoodMaterials(blanks, nominalStockThickness, averageBoardWidth,
     const order = calculateHardwoodOrder(materialBlanks, nominalStockThickness, averageBoardWidth, wastePct, layoutBoardFeet);
     return { material, blanks: materialBlanks, layout, order };
   });
+}
+
+const HARDWOOD_STORE_WIDTHS = [4, 5, 6, 7, 8];
+const HARDWOOD_STORE_LENGTHS = [96, 108, 120, 132, 144];
+
+function recommendHardwoodStock(parts, quantity, config, kerf) {
+  const candidates = [];
+
+  HARDWOOD_STORE_WIDTHS.forEach(boardWidth => {
+    HARDWOOD_STORE_LENGTHS.forEach(boardLength => {
+      const build = buildHardwoodBlanks(parts, quantity, config.stockThickness, config.widthOverage, config.lengthOverage, {
+        boardWidth,
+        kerf,
+        widePartStrategy: config.widePartStrategy,
+      });
+      const plans = planHardwoodMaterials(build.blanks, config.nominalStockThickness, config.averageBoardWidth, config.wastePct, boardWidth, boardLength, kerf, config.endTrim);
+      const complete = plans.length > 0 && plans.every(plan => plan.layout.warnings.length === 0 && plan.layout.placedCount === plan.layout.blankCount);
+      if (!complete) return;
+
+      const boardFeetEach = boardWidth * boardLength * config.nominalStockThickness / 144;
+      const materials = plans.map(plan => {
+        const boardCount = Math.max(
+          plan.layout.boards.length,
+          Math.ceil((plan.order.purchaseBoardFeet / boardFeetEach) - 1e-9),
+        );
+        return {
+          material: plan.material,
+          boardCount,
+          mappedBoardCount: plan.layout.boards.length,
+          purchasedBoardFeet: boardCount * boardFeetEach,
+        };
+      });
+      const boardCount = materials.reduce((sum, material) => sum + material.boardCount, 0);
+      const purchasedBoardFeet = materials.reduce((sum, material) => sum + material.purchasedBoardFeet, 0);
+      const glueSeams = build.widthGlueGroups.reduce((sum, group) => sum + group.partCount * group.layerCount * (group.widthPanelCount - 1), 0);
+      candidates.push({ boardWidth, boardLength, boardCount, purchasedBoardFeet, glueSeams, materials });
+    });
+  });
+
+  candidates.sort((a, b) =>
+    a.purchasedBoardFeet - b.purchasedBoardFeet ||
+    a.boardCount - b.boardCount ||
+    a.glueSeams - b.glueSeams ||
+    b.boardWidth - a.boardWidth ||
+    b.boardLength - a.boardLength
+  );
+  return candidates[0] || null;
 }
 
 function collapseWarnings(warnings) {
@@ -1257,7 +1358,8 @@ function renderHardwoodBoardSVG(layout, boardWidth, boardLength, endTrim) {
     const color = COLORS[index % COLORS.length];
     parts += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${color}" fill-opacity="0.72" stroke="#342d25" stroke-width="0.8"/>`;
     if (w > 65 && h > 14) {
-      const label = `${placement.part.partId} L${placement.part.layerNumber}/${placement.part.layerCount}`;
+      const widthLabel = placement.part.widthPanelCount > 1 ? ` W${placement.part.widthPanelNumber}/${placement.part.widthPanelCount}` : '';
+      const label = `${placement.part.partId} L${placement.part.layerNumber}/${placement.part.layerCount}${widthLabel}`;
       parts += `<text x="${(x + w / 2).toFixed(1)}" y="${(y + h / 2).toFixed(1)}" font-size="7" fill="#17130f" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif">${esc(label)}</text>`;
     }
   });
@@ -1301,6 +1403,7 @@ function getHardwoodConfig() {
     boardWidth: parseFloat(document.getElementById('layoutBoardWidth').value),
     boardLength: parseFloat(document.getElementById('layoutBoardLength').value),
     endTrim: Math.max(0, parseFloat(document.getElementById('boardEndTrim').value) || 0),
+    widePartStrategy: document.getElementById('widePartStrategy').value,
   };
 }
 
@@ -1333,7 +1436,7 @@ document.getElementById('quantity').addEventListener('input', () => {
 document.querySelectorAll('input[name="workflow"]').forEach(input => {
   input.addEventListener('change', () => setWorkflow(input.value));
 });
-['kerf', 'hardwoodThickness', 'averageBoardWidth', 'hardwoodWaste', 'blankWidthOverage', 'blankLengthOverage', 'layoutBoardWidth', 'layoutBoardLength', 'boardEndTrim'].forEach(id => {
+['kerf', 'hardwoodThickness', 'averageBoardWidth', 'hardwoodWaste', 'blankWidthOverage', 'blankLengthOverage', 'layoutBoardWidth', 'widePartStrategy', 'layoutBoardLength', 'boardEndTrim'].forEach(id => {
   document.getElementById(id).addEventListener('input', () => {
     invalidateResults();
     updateHardwoodEstimate();
@@ -1399,7 +1502,7 @@ function updatePartCount() {
   document.getElementById('partCount').textContent = `(${loadedParts.length} parts${suffix})`;
 }
 
-function hardwoodTicketMarkup(build, plans, config) {
+function hardwoodTicketMarkup(build, plans, config, recommendation) {
   const totalOrderBoardFeet = plans.reduce((sum, plan) => sum + plan.order.orderBoardFeet, 0);
   const totalOrderLinearFeet = plans.reduce((sum, plan) => sum + plan.order.orderLinearFeet, 0);
   const totalNetBoardFeet = plans.reduce((sum, plan) => sum + plan.order.netBoardFeet, 0);
@@ -1416,7 +1519,28 @@ function hardwoodTicketMarkup(build, plans, config) {
       : `${group.thicknessMargin.toFixed(3)}" thickness margin`;
     rows += `<tr><td>${esc(group.material)}</td><td>${fractionStr(group.finishedThickness)}</td><td>${group.layerCount} × ${fractionStr(config.stockThickness)} stock<br>${thicknessNote}</td><td>${group.partCount}</td><td>${group.blankCount}</td></tr>`;
   });
+  let widthRows = '';
+  build.widthGlueGroups.forEach(group => {
+    widthRows += `<tr><td>${esc(group.partId)}</td><td>${group.finishedWidth.toFixed(3)}" W × ${group.finishedLength.toFixed(3)}" L × ${group.finishedThickness.toFixed(3)}" T</td><td>${group.widthPanelCount} × ${group.stripWidth.toFixed(3)}" rough strips per layer</td><td>${group.partCount}</td><td>${group.stripBlankCount}</td></tr>`;
+  });
+  const widthTable = widthRows
+    ? `<table class="lamination-table"><thead><tr><th>Wide part</th><th>Finished size</th><th>Edge glue-up</th><th>Finished parts</th><th>Strips to cut</th></tr></thead><tbody>${widthRows}</tbody></table>`
+    : '';
+  let recommendationMarkup = '<p class="ticket-warning">No single stocked size from 4–8″ wide and 8–12′ long can place every blank grain-correct. Enable edge-glue strips or revise the stock range.</p>';
+  if (recommendation) {
+    const materialRecommendations = recommendation.materials
+      .map(item => `<tr><td>${esc(item.material)}</td><td>${item.boardCount}</td><td>${recommendation.boardWidth}″ × ${recommendation.boardLength / 12}′</td><td>${item.purchasedBoardFeet.toFixed(1)} bd ft</td></tr>`)
+      .join('');
+    recommendationMarkup = `<div class="ticket-grid">
+        <div><span class="ticket-value">${recommendation.boardCount} boards</span><span class="ticket-label">Recommended shopping quantity</span></div>
+        <div><span class="ticket-value">${recommendation.boardWidth}″ × ${recommendation.boardLength / 12}′</span><span class="ticket-label">Recommended board size</span></div>
+        <div><span class="ticket-value">${recommendation.purchasedBoardFeet.toFixed(1)} bd ft</span><span class="ticket-label">Stock represented by those boards</span></div>
+      </div>
+      <p class="ticket-detail">Recommendation compares stocked widths of 4–8″ and lengths of 8–12′. It minimizes whole-board purchase volume first, then board count and edge-glue seams. The board count includes the ${config.wastePct}% order allowance.</p>
+      <table class="lamination-table"><thead><tr><th>Material</th><th>Boards to buy</th><th>Recommended size</th><th>Purchase volume</th></tr></thead><tbody>${materialRecommendations}</tbody></table>`;
+  }
   return `<h3>Hardwood order estimate</h3>
+    ${recommendationMarkup}
     <div class="ticket-grid">
       <div><span class="ticket-value">${totalOrderBoardFeet} bd ft</span><span class="ticket-label">Recommended order (rounded per material)</span></div>
       <div><span class="ticket-value">${totalOrderLinearFeet} lin ft</span><span class="ticket-label">Equivalent at ${config.averageBoardWidth}" average width</span></div>
@@ -1425,7 +1549,8 @@ function hardwoodTicketMarkup(build, plans, config) {
     </div>
     <p class="ticket-detail">Net requirement: ${totalNetBoardFeet.toFixed(2)} bd ft / ${totalNetLinearFeet.toFixed(1)} linear ft at ${config.averageBoardWidth}" average width. The selected ${config.boardWidth}" × ${config.boardLength / 12}′ cut maps require ${totalLayoutBoardFeet.toFixed(1)} bd ft before defect allowance. Each material uses whichever requirement is larger. Board feet remains accurate when delivered widths vary; linear feet is width-dependent.</p>
     <table class="lamination-table"><thead><tr><th>Material</th><th>Order</th><th>Linear equivalent</th><th>Mapped boards</th></tr></thead><tbody>${materialRows}</tbody></table>
-    <table class="lamination-table"><thead><tr><th>Material</th><th>Finished thickness</th><th>Build-up</th><th>Finished parts</th><th>Blanks to cut</th></tr></thead><tbody>${rows}</tbody></table>`;
+    <table class="lamination-table"><thead><tr><th>Material</th><th>Finished thickness</th><th>Build-up</th><th>Finished parts</th><th>Blanks to cut</th></tr></thead><tbody>${rows}</tbody></table>
+    ${widthTable}`;
 }
 
 function updateHardwoodEstimate() {
@@ -1447,11 +1572,16 @@ function updateHardwoodEstimate() {
     return;
   }
   wasteInput.removeAttribute('aria-invalid');
-  const build = buildHardwoodBlanks(loadedParts, quantity, config.stockThickness, config.widthOverage, config.lengthOverage);
   const kerfValue = parseFloat(document.getElementById('kerf').value);
   const kerf = isNaN(kerfValue) ? 0.125 : Math.max(0, kerfValue);
+  const build = buildHardwoodBlanks(loadedParts, quantity, config.stockThickness, config.widthOverage, config.lengthOverage, {
+    boardWidth: config.boardWidth,
+    kerf,
+    widePartStrategy: config.widePartStrategy,
+  });
   const plans = planHardwoodMaterials(build.blanks, config.nominalStockThickness, config.averageBoardWidth, config.wastePct, config.boardWidth, config.boardLength, kerf, config.endTrim);
-  estimate.innerHTML = hardwoodTicketMarkup(build, plans, config);
+  const recommendation = recommendHardwoodStock(loadedParts, quantity, config, kerf);
+  estimate.innerHTML = hardwoodTicketMarkup(build, plans, config, recommendation);
 }
 
 function runOptimize() {
@@ -1593,7 +1723,11 @@ function runHardwoodOptimize() {
     return;
   }
 
-  const build = buildHardwoodBlanks(loadedParts, quantity, config.stockThickness, config.widthOverage, config.lengthOverage);
+  const build = buildHardwoodBlanks(loadedParts, quantity, config.stockThickness, config.widthOverage, config.lengthOverage, {
+    boardWidth: config.boardWidth,
+    kerf,
+    widePartStrategy: config.widePartStrategy,
+  });
   const plans = planHardwoodMaterials(build.blanks, config.nominalStockThickness, config.averageBoardWidth, config.wastePct, config.boardWidth, config.boardLength, kerf, config.endTrim);
   const warnings = collapseWarnings([
     ...loadedWarnings.map(warning => `CSV: ${warning}`),
@@ -1619,17 +1753,18 @@ function runHardwoodOptimize() {
     <div class="stat"><span class="stat-val">${totalBoards}</span><span class="stat-lbl">${config.boardWidth}" × ${config.boardLength / 12}′ Boards</span></div>
     <div class="stat"><span class="stat-val">${totalWastePct}%</span><span class="stat-lbl">Cut-map Waste</span></div>
   </div>`;
-  html += `<p class="grain-rule"><strong>Grain rule:</strong> every blank’s CSV Height runs left-to-right along board grain. Cross-grain rotation is disabled. The cut map places exact rough blanks; the ${config.wastePct}% purchasing allowance remains unassigned for defects and selection.</p>`;
+  html += `<p class="grain-rule"><strong>Grain rule:</strong> every blank’s CSV Height runs left-to-right along board grain. Cross-grain rotation is disabled.${config.widePartStrategy === 'glue' ? ' Wide parts are divided into equal, full-length edge-glue strips.' : ' Wide parts require a single board wide enough for the rough blank.'} The ${config.wastePct}% purchasing allowance remains unassigned for defects and selection.</p>`;
 
   plans.forEach(plan => {
     html += `<div class="mat-header"><h2>${esc(plan.material)}</h2><div class="mat-stats">Order ${plan.order.orderBoardFeet} bd ft / ${plan.order.orderLinearFeet} lin ft equivalent — ${plan.layout.boards.length} mapped board${plan.layout.boards.length === 1 ? '' : 's'}</div></div>`;
     plan.layout.boards.forEach(board => {
       html += `<div class="board-card"><h3>${esc(plan.material)} — Board ${board.index} of ${plan.layout.boards.length} <span class="sheet-waste">${board.wastePct}% waste</span></h3>`;
       html += `<div class="svg-wrap">${renderHardwoodBoardSVG(board, config.boardWidth, config.boardLength, config.endTrim)}</div>`;
-      html += `<details open><summary>Blank List (${board.placements.length})</summary><table class="cl-table"><thead><tr><th>Part ID</th><th>Cabinet</th>${quantity > 1 ? '<th>Set</th>' : ''}<th>Lamination</th><th>Rough width</th><th>Rough length / grain</th><th>Finished thickness</th></tr></thead><tbody>`;
+      html += `<details open><summary>Blank List (${board.placements.length})</summary><table class="cl-table"><thead><tr><th>Part ID</th><th>Cabinet</th>${quantity > 1 ? '<th>Set</th>' : ''}<th>Thickness layer</th><th>Width panel</th><th>Strip width</th><th>Rough length / grain</th><th>Finished size</th></tr></thead><tbody>`;
       board.placements.forEach(placement => {
         const blank = placement.part;
-        html += `<tr><td>${esc(blank.partId)}</td><td>${esc(blank.cabId)}</td>${quantity > 1 ? `<td>${blank.copyNumber}</td>` : ''}<td>${blank.layerNumber} of ${blank.layerCount}</td><td>${blank.width.toFixed(3)}"</td><td>${blank.height.toFixed(3)}" →</td><td>${blank.finishedThickness.toFixed(3)}"</td></tr>`;
+        const widthPanel = blank.widthPanelCount > 1 ? `${blank.widthPanelNumber} of ${blank.widthPanelCount} (edge glue)` : 'Single board';
+        html += `<tr><td>${esc(blank.partId)}</td><td>${esc(blank.cabId)}</td>${quantity > 1 ? `<td>${blank.copyNumber}</td>` : ''}<td>${blank.layerNumber} of ${blank.layerCount}</td><td>${widthPanel}</td><td>${blank.width.toFixed(3)}"</td><td>${blank.height.toFixed(3)}" →</td><td>${blank.finishedWidth.toFixed(3)}" W × ${blank.finishedThickness.toFixed(3)}" T</td></tr>`;
       });
       html += '</tbody></table></details></div>';
     });

@@ -171,9 +171,12 @@ Choose **Linear Foot (Hardwood)** for face frames and other solid-wood parts:
 - Select 4/4, 5/4, or 8/4 stock. Lamination count uses dressed thickness (3/4", 1", or 1-3/4"), while board-foot ordering uses nominal thickness (1", 1-1/4", or 2").
 - The order ticket reports recommended board feet and equivalent linear feet at a selectable average delivered width. Board feet remains the reliable quantity when the lumber yard supplies mixed widths.
 - Finished parts thicker than the usable stock become explicit glue-up layers. A 1-1/2" part cut from 4/4 stock creates two full-size blanks.
+- Parts wider than the selected board can be divided into equal-width edge-glue strips. Each strip remains full length so CSV `Height` and the finished part grain stay aligned with the board grain. Choose **Require one wide board** when edge glue-ups are not acceptable.
+- The width glue-up schedule lists the rough strip width, strip count, finished-part count, and total blanks to cut. For example, a 9" drawer face with 1/4" rough overage becomes two 4.625" strips on 6" stock.
 - The lamination schedule flags an exact-thickness buildup, such as 2 × 3/4" = 1-1/2", because it leaves no thickness for flattening after glue-up. Use thicker/rougher stock when the final dimension must survive post-glue surfacing.
 - Configurable rough width/length overage preserves material for jointing, trimming, and final milling.
 - Choose a received board width from 4–8" and length from 8–12 ft to produce a board-by-board cutting map. Rerun the map for each stock size in a mixed delivery.
+- The shopping recommendation evaluates every stocked 4–8" width and 8–12 ft length, then reports an exact board count and size per material. It minimizes whole-board purchase volume first, followed by board count and glue seams, and includes the configured defect/milling allowance.
 - Grain is a hard constraint: CSV `Height` always runs along board length. Hardwood blanks are never rotated cross-grain to improve fit.
 - Named CSV materials/species receive separate order quantities and board layouts. Empty Material values are grouped as `Hardwood`.
 - The purchasing allowance is reserved for defects, color selection, and milling; it is not artificially filled with cut-map parts.
@@ -237,6 +240,7 @@ Each axis value (`x`, `y`, or `z`) tells the add-in which local axis corresponds
 | Installer says "AddIns folder not found" | Run Fusion 360 at least once before installing to create the folder. |
 | CSV has empty Material column | The optimizer auto-labels parts by thickness (e.g., "Plywood 3/4""). |
 | Parts show as "exceeds sheet size" | Check dimensions — part may be larger than your configured sheet size. Also check if edge cleanup is on; effective sheet size is reduced by 2× the trim amount per axis. |
+| Hardwood drawer faces are missing from the map | Select **Edge-glue equal strips**. If **Require one wide board** is selected, every rough blank must fit the chosen board width; the optimizer reports excluded parts and suggests wider stock. |
 | Orientation rules not loading | Verify `BodyPartsOrientation.csv` is next to the `.py` file in the AddIns folder. |
 | Identical parts have swapped dimensions | The thickness-lock feature (enabled by default) should prevent this. If it persists, check that you have the latest add-in version installed. |
 | Grain-fit warning for a part | The part cannot fit with its Height dimension along the sheet's long side. Try a larger sheet, reduce the trim amount, or disable grain lock for that run. |
