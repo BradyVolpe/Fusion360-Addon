@@ -12,6 +12,8 @@ const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
 
 assert.ok(scriptMatch, 'index.html must contain an inline script');
 assert.doesNotThrow(() => new vm.Script(scriptMatch[1]), 'the complete browser script must parse');
+assert.match(scriptMatch[1], /estimate\.innerHTML = hardwoodTicketMarkup\(build, plans, config, recommendation\)/);
+assert.match(scriptMatch[1], /order-ticket">\$\{hardwoodTicketMarkup\(build, plans, config, recommendation\)\}/);
 
 const pureScript = scriptMatch[1].split('// ===== UI =====')[0];
 const context = {};

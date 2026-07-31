@@ -1729,6 +1729,7 @@ function runHardwoodOptimize() {
     widePartStrategy: config.widePartStrategy,
   });
   const plans = planHardwoodMaterials(build.blanks, config.nominalStockThickness, config.averageBoardWidth, config.wastePct, config.boardWidth, config.boardLength, kerf, config.endTrim);
+  const recommendation = recommendHardwoodStock(loadedParts, quantity, config, kerf);
   const warnings = collapseWarnings([
     ...loadedWarnings.map(warning => `CSV: ${warning}`),
     ...build.warnings,
@@ -1746,7 +1747,7 @@ function runHardwoodOptimize() {
     warnings.forEach(warning => { html += `<li>${esc(warning)}</li>`; });
     html += '</ul></div>';
   }
-  html += `<div class="order-ticket">${hardwoodTicketMarkup(build, plans, config)}</div>`;
+  html += `<div class="order-ticket">${hardwoodTicketMarkup(build, plans, config, recommendation)}</div>`;
   html += `<div class="summary">
     <div class="stat"><span class="stat-val">${loadedParts.length * quantity}</span><span class="stat-lbl">Finished Parts${quantity > 1 ? ` (${quantity} sets)` : ''}</span></div>
     <div class="stat"><span class="stat-val">${totalPlaced}/${build.blanks.length}</span><span class="stat-lbl">Blanks Placed</span></div>
